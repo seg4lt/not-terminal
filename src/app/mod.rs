@@ -1,3 +1,4 @@
+mod git_branch;
 mod git_worktrees;
 mod model;
 mod persistence;

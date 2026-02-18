@@ -13,8 +13,11 @@ use iced::{
     window::{self},
 };
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 pub(crate) const SIDEBAR_WIDTH_EXPANDED: f32 = 248.0;
+pub(crate) const HEADER_HEIGHT: f32 = 32.0;
+const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
 
 #[derive(Debug, Clone)]
 pub(crate) enum RenameTarget {
@@ -50,6 +53,15 @@ pub(crate) struct TerminalLocator {
     pub(crate) terminal_idx: usize,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveTerminalContext {
+    pub(crate) project_name: String,
+    pub(crate) worktree_name: String,
+    pub(crate) terminal_name: String,
+    pub(crate) terminal_id: String,
+    pub(crate) worktree_path: String,
+}
+
 pub(crate) struct App {
     pub(crate) title: String,
     pub(crate) window_id: Option<window::Id>,
@@ -67,6 +79,10 @@ pub(crate) struct App {
     pub(crate) quick_open_open: bool,
     pub(crate) quick_open_query: String,
     pub(crate) rename_dialog: Option<RenameDialog>,
+    pub(crate) suppress_next_key_release: bool,
+    pub(crate) branch_by_terminal: HashMap<String, String>,
+    pub(crate) last_branch_refresh_terminal_id: Option<String>,
+    pub(crate) last_branch_refresh_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +131,10 @@ pub(crate) enum Message {
     RenameCommit,
     RenameCancel,
     SwitchTerminalByOffset(i32),
+    ActiveBranchResolved {
+        terminal_id: String,
+        branch: Option<String>,
+    },
 }
 
 impl App {
@@ -136,6 +156,10 @@ impl App {
             quick_open_open: false,
             quick_open_query: String::new(),
             rename_dialog: None,
+            suppress_next_key_release: false,
+            branch_by_terminal: HashMap::new(),
+            last_branch_refresh_terminal_id: None,
+            last_branch_refresh_at: None,
         };
 
         (
@@ -214,9 +238,21 @@ impl App {
 
     pub(crate) fn terminal_frame_logical(&self) -> (f32, f32, f32, f32) {
         let sidebar_width = self.sidebar_width_logical();
+        let header_height = self.header_height_logical();
         let terminal_width = (self.window_size.width - sidebar_width).max(1.0);
-        let terminal_height = self.window_size.height.max(1.0);
-        (sidebar_width, 0.0, terminal_width, terminal_height)
+        let terminal_height = (self.window_size.height - header_height).max(1.0);
+        (
+            sidebar_width,
+            header_height,
+            terminal_width,
+            terminal_height,
+        )
+    }
+
+    pub(crate) fn header_height_logical(&self) -> f32 {
+        HEADER_HEIGHT
+            .max(0.0)
+            .min(self.window_size.height.max(1.0) - 1.0)
     }
 
     pub(crate) fn terminal_frame_px(&self) -> (u32, u32, u32, u32) {
@@ -224,10 +260,17 @@ impl App {
         let scale = self.window_scale_factor.max(0.1);
         let mut sidebar_width_px = (self.sidebar_width_logical() * scale).max(0.0).round() as u32;
         sidebar_width_px = sidebar_width_px.min(window_width_px.saturating_sub(1));
+        let mut header_height_px = (self.header_height_logical() * scale).max(0.0).round() as u32;
+        header_height_px = header_height_px.min(window_height_px.saturating_sub(1));
 
         let terminal_width_px = window_width_px.saturating_sub(sidebar_width_px).max(1);
-        let terminal_height_px = window_height_px.max(1);
-        (sidebar_width_px, 0, terminal_width_px, terminal_height_px)
+        let terminal_height_px = window_height_px.saturating_sub(header_height_px).max(1);
+        (
+            sidebar_width_px,
+            header_height_px,
+            terminal_width_px,
+            terminal_height_px,
+        )
     }
 
     pub(crate) fn terminal_local_from_position(&self, position: Point) -> Option<(f64, f64)> {
@@ -312,6 +355,61 @@ impl App {
                 .first()
                 .map(|terminal| terminal.id.clone())
         })
+    }
+
+    pub(crate) fn active_terminal_context(&self) -> Option<ActiveTerminalContext> {
+        let active_terminal_id = self.active_terminal_id()?;
+        let locator = self.find_terminal_locator(&active_terminal_id)?;
+
+        let project = self.persisted.projects.get(locator.project_idx)?;
+        let worktree = project.worktrees.get(locator.worktree_idx)?;
+        let terminal = worktree.terminals.get(locator.terminal_idx)?;
+
+        Some(ActiveTerminalContext {
+            project_name: project.name.clone(),
+            worktree_name: worktree.name.clone(),
+            terminal_name: terminal.name.clone(),
+            terminal_id: terminal.id.clone(),
+            worktree_path: worktree.path.clone(),
+        })
+    }
+
+    pub(crate) fn active_branch(&self) -> Option<String> {
+        let terminal_id = self.active_terminal_id()?;
+        self.branch_by_terminal.get(&terminal_id).cloned()
+    }
+
+    pub(crate) fn refresh_active_branch_task(&mut self) -> Task<Message> {
+        let Some(context) = self.active_terminal_context() else {
+            return Task::none();
+        };
+
+        let now = Instant::now();
+        let too_soon = self
+            .last_branch_refresh_terminal_id
+            .as_ref()
+            .is_some_and(|terminal_id| terminal_id == &context.terminal_id)
+            && self
+                .last_branch_refresh_at
+                .is_some_and(|last| now.duration_since(last) < BRANCH_REFRESH_INTERVAL);
+
+        if too_soon {
+            return Task::none();
+        }
+
+        let terminal_id = context.terminal_id.clone();
+        let worktree_path = context.worktree_path.clone();
+
+        self.last_branch_refresh_terminal_id = Some(terminal_id.clone());
+        self.last_branch_refresh_at = Some(now);
+
+        Task::perform(
+            async move { crate::app::git_branch::resolve_branch(&worktree_path) },
+            move |branch| Message::ActiveBranchResolved {
+                terminal_id,
+                branch,
+            },
+        )
     }
 
     pub(crate) fn find_terminal_locator(&self, terminal_id: &str) -> Option<TerminalLocator> {
@@ -476,11 +574,13 @@ impl App {
         let (_, _, width_px, height_px) = self.terminal_frame_px();
         let scale = self.window_scale_factor.max(0.1) as f64;
         let active_terminal_id = self.active_terminal_id();
+        let modal_open = self.modal_open();
 
         for (terminal_id, runtime) in &mut self.runtimes {
-            let active = active_terminal_id
-                .as_ref()
-                .is_some_and(|id| id == terminal_id);
+            let active = !modal_open
+                && active_terminal_id
+                    .as_ref()
+                    .is_some_and(|id| id == terminal_id);
 
             host_view_set_frame(
                 runtime.host_view,
@@ -502,6 +602,11 @@ impl App {
 
     pub(crate) fn remove_runtime(&mut self, terminal_id: &str) {
         self.runtimes.remove(terminal_id);
+        self.branch_by_terminal.remove(terminal_id);
+    }
+
+    pub(crate) fn modal_open(&self) -> bool {
+        self.quick_open_open || self.preferences_open || self.rename_dialog.is_some()
     }
 
     pub(crate) fn select_project(&mut self, project_id: &str) {

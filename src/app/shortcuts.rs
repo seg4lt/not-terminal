@@ -82,11 +82,11 @@ pub(crate) fn detect_shortcut(
         return Some(ShortcutAction::ToggleSidebar);
     }
 
-    if is_letter(key_char.as_deref(), "p") && !modifiers.shift() {
+    if is_key_p(key_char.as_deref(), physical_key) && !modifiers.shift() {
         return Some(ShortcutAction::OpenQuickOpen);
     }
 
-    if is_letter(key_char.as_deref(), "r") && !modifiers.shift() {
+    if is_key_r(key_char.as_deref(), physical_key) && !modifiers.shift() {
         return Some(ShortcutAction::RenameTerminal);
     }
 
@@ -118,6 +118,14 @@ fn key_character(key: &Key) -> Option<String> {
 
 fn is_letter(value: Option<&str>, target: &str) -> bool {
     matches!(value, Some(v) if v == target)
+}
+
+fn is_key_p(value: Option<&str>, physical: &Physical) -> bool {
+    is_letter(value, "p") || matches!(physical, Physical::Code(Code::KeyP))
+}
+
+fn is_key_r(value: Option<&str>, physical: &Physical) -> bool {
+    is_letter(value, "r") || matches!(physical, Physical::Code(Code::KeyR))
 }
 
 fn is_comma(value: Option<&str>, physical: &Physical) -> bool {

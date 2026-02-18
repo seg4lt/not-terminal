@@ -1,6 +1,6 @@
 use super::shortcuts::{ShortcutAction, detect_shortcut};
 use super::state::{App, Message};
-use iced::{Task, keyboard, mouse, window};
+use iced::{Task, keyboard, mouse, widget::operation, window};
 
 pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
     match message {
@@ -80,9 +80,21 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.keyboard_modifiers = *modifiers;
             }
 
+            if app.suppress_next_key_release {
+                match event {
+                    keyboard::Event::KeyReleased { .. } => {
+                        app.suppress_next_key_release = false;
+                        return Task::none();
+                    }
+                    keyboard::Event::KeyPressed { .. } => {
+                        app.suppress_next_key_release = false;
+                    }
+                    keyboard::Event::ModifiersChanged(_) => {}
+                }
+            }
+
             let allow_plain_rename = app.active_terminal_id().is_none();
-            let modal_open =
-                app.rename_dialog.is_some() || app.quick_open_open || app.preferences_open;
+            let modal_open = app.modal_open();
             if let Some(action) = detect_shortcut(&event, allow_plain_rename, modal_open) {
                 return apply_shortcut(app, action);
             }
@@ -91,16 +103,27 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            let mut should_refresh_branch = false;
             if let Some(ghostty) = app.active_ghostty_mut()
                 && ghostty.handle_keyboard_event(&event)
             {
                 ghostty.refresh();
                 ghostty.force_tick();
+                should_refresh_branch = true;
+            }
+
+            if should_refresh_branch {
+                return app.refresh_active_branch_task();
             }
             Task::none()
         }
         Message::Mouse(event) => {
+            if app.modal_open() {
+                return Task::none();
+            }
+
             let modifiers = app.keyboard_modifiers;
+            let mut should_refresh_branch = false;
             match event {
                 mouse::Event::CursorMoved { position } => {
                     app.cursor_position_logical = Some(position);
@@ -128,6 +151,9 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                         && let Some(ghostty) = app.active_ghostty_mut()
                     {
                         ghostty.handle_mouse_move(x, y, modifiers);
+                        if pressed {
+                            should_refresh_branch = true;
+                        }
                         if ghostty.handle_mouse_button(button, pressed, modifiers) {
                             ghostty.refresh();
                             ghostty.force_tick();
@@ -150,12 +176,17 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                             ghostty.handle_mouse_scroll(scroll_x, scroll_y, precision);
                             ghostty.refresh();
                             ghostty.force_tick();
+                            should_refresh_branch = true;
                         }
                     }
                 }
                 mouse::Event::CursorEntered => {}
             }
-            Task::none()
+            if should_refresh_branch {
+                app.refresh_active_branch_task()
+            } else {
+                Task::none()
+            }
         }
         Message::ToggleSidebar => {
             app.sidebar_collapsed = !app.sidebar_collapsed;
@@ -261,6 +292,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.quick_open_open = false;
                 app.rename_dialog = None;
             }
+            app.sync_runtime_views();
             Task::none()
         }
         Message::OpenQuickOpen(open) => {
@@ -270,7 +302,15 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.preferences_open = false;
                 app.rename_dialog = None;
             }
-            Task::none()
+            app.sync_runtime_views();
+            if open {
+                Task::batch([
+                    operation::focus("quick-open-input"),
+                    operation::move_cursor_to_end("quick-open-input"),
+                ])
+            } else {
+                Task::none()
+            }
         }
         Message::QuickOpenQueryChanged(value) => {
             app.quick_open_query = value;
@@ -303,13 +343,29 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.start_rename_focused();
             app.quick_open_open = false;
             app.preferences_open = false;
-            Task::none()
+            app.sync_runtime_views();
+            if app.rename_dialog.is_some() {
+                Task::batch([
+                    operation::focus("rename-input"),
+                    operation::move_cursor_to_end("rename-input"),
+                ])
+            } else {
+                Task::none()
+            }
         }
         Message::StartRenameTerminal => {
             app.start_rename_active_terminal();
             app.quick_open_open = false;
             app.preferences_open = false;
-            Task::none()
+            app.sync_runtime_views();
+            if app.rename_dialog.is_some() {
+                Task::batch([
+                    operation::focus("rename-input"),
+                    operation::move_cursor_to_end("rename-input"),
+                ])
+            } else {
+                Task::none()
+            }
         }
         Message::RenameValueChanged(value) => {
             if let Some(dialog) = app.rename_dialog.as_mut() {
@@ -320,6 +376,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::RenameCommit => {
             if app.commit_rename() {
                 app.status = String::from("Renamed");
+                app.sync_runtime_views();
                 app.save_task()
             } else {
                 Task::none()
@@ -327,6 +384,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::RenameCancel => {
             app.rename_dialog = None;
+            app.sync_runtime_views();
             Task::none()
         }
         Message::SwitchTerminalByOffset(offset) => {
@@ -334,6 +392,21 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.ensure_active_runtime();
             app.sync_runtime_views();
             app.save_task()
+        }
+        Message::ActiveBranchResolved {
+            terminal_id,
+            branch,
+        } => {
+            if app.find_terminal_locator(&terminal_id).is_none() {
+                return Task::none();
+            }
+
+            if let Some(branch) = branch {
+                app.branch_by_terminal.insert(terminal_id, branch);
+            } else {
+                app.branch_by_terminal.remove(&terminal_id);
+            }
+            Task::none()
         }
     }
 }
@@ -372,6 +445,7 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
         ShortcutAction::NextTerminal => update(app, Message::SwitchTerminalByOffset(1)),
         ShortcutAction::PreviousTerminal => update(app, Message::SwitchTerminalByOffset(-1)),
         ShortcutAction::ModalCancel => {
+            app.suppress_next_key_release = true;
             if app.rename_dialog.is_some() {
                 return update(app, Message::RenameCancel);
             }
@@ -384,6 +458,7 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             Task::none()
         }
         ShortcutAction::ModalSubmit => {
+            app.suppress_next_key_release = true;
             if app.rename_dialog.is_some() {
                 return update(app, Message::RenameCommit);
             }
