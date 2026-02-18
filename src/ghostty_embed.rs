@@ -380,6 +380,10 @@ mod macos {
             self.surface as usize
         }
 
+        pub fn reset_modifiers(&mut self) {
+            self.modifiers = Modifiers::default();
+        }
+
         pub fn key_event_is_binding(&self, event: &KeyboardEvent) -> bool {
             let KeyboardEvent::KeyPressed {
                 key,
@@ -1148,6 +1152,8 @@ impl GhosttyEmbed {
     pub fn binding_action(&mut self, _action: &str) -> bool {
         false
     }
+
+    pub fn reset_modifiers(&mut self) {}
 }
 
 #[cfg(not(target_os = "macos"))]

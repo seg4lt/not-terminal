@@ -6,7 +6,7 @@ use crate::app::model::{
 use crate::app::persistence;
 use crate::app::runtime::{PaneRuntime, RuntimeSession};
 use crate::ghostty_embed::{
-    GhosttyEmbed, GhosttyGotoSplitDirection, GhosttyRuntimeAction, host_view_free, host_view_new,
+    GhosttyEmbed, GhosttyRuntimeAction, host_view_free, host_view_new,
     ns_view_ptr,
 };
 use iced::{
@@ -691,19 +691,6 @@ impl App {
         self.runtimes
             .get_mut(&active_terminal_id)
             .and_then(|runtime| runtime.active_ghostty_mut())
-    }
-
-    pub(crate) fn goto_split_in_active_runtime(
-        &mut self,
-        direction: GhosttyGotoSplitDirection,
-    ) -> bool {
-        let Some(active_terminal_id) = self.active_terminal_id() else {
-            return false;
-        };
-        let (_, _, width, height) = self.terminal_frame_logical();
-        self.runtimes
-            .get_mut(&active_terminal_id)
-            .is_some_and(|runtime| runtime.goto_split_from_surface(0, direction, width, height))
     }
 
     pub(crate) fn sync_runtime_views(&mut self) {
