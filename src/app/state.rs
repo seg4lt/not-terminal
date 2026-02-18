@@ -706,24 +706,6 @@ impl App {
             .and_then(|runtime| runtime.active_ghostty_mut())
     }
 
-    pub(crate) fn sync_modifiers_from_active_pane(&mut self) {
-        let Some(active_terminal_id) = self.active_terminal_id() else {
-            return;
-        };
-        let Some(modifiers) = self
-            .runtimes
-            .get(&active_terminal_id)
-            .and_then(|runtime| runtime.active_ghostty_modifiers())
-        else {
-            return;
-        };
-        for runtime in self.runtimes.values_mut() {
-            for pane in runtime.panes_mut() {
-                pane.update_modifiers(modifiers);
-            }
-        }
-    }
-
     pub(crate) fn sync_runtime_views(&mut self) {
         let (x_logical, y_logical, width_logical, height_logical) = self.terminal_frame_logical();
         let scale = self.window_scale_factor.max(0.1) as f64;

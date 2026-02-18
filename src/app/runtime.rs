@@ -2,7 +2,6 @@ use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyGotoSplitDirection, GhosttyResizeSplitDirection, GhosttyRuntimeAction,
     GhosttySplitDirection, host_view_free, host_view_set_frame, host_view_set_hidden,
 };
-use iced::keyboard;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,14 +47,6 @@ impl PaneRuntime {
     pub(crate) fn surface_ptr(&self) -> usize {
         self.ghostty.surface_ptr()
     }
-
-    pub(crate) fn update_modifiers(&mut self, modifiers: keyboard::Modifiers) {
-        self.ghostty.update_modifiers(modifiers);
-    }
-
-    pub(crate) fn ghostty_modifiers(&self) -> keyboard::Modifiers {
-        self.ghostty.modifiers()
-    }
 }
 
 impl Drop for PaneRuntime {
@@ -93,11 +84,6 @@ impl RuntimeSession {
 
     pub(crate) fn panes_mut(&mut self) -> impl Iterator<Item = &mut PaneRuntime> {
         self.panes.values_mut()
-    }
-
-    pub(crate) fn active_ghostty_modifiers(&self) -> Option<keyboard::Modifiers> {
-        self.panes.get(&self.active_pane_id)
-            .map(|pane| pane.ghostty_modifiers())
     }
 
     pub(crate) fn tick_all(&mut self) -> bool {
