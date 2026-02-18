@@ -39,12 +39,14 @@ mod macos {
     const GHOSTTY_MODS_CTRL_RIGHT: c_int = 1 << 7;
     const GHOSTTY_MODS_ALT_RIGHT: c_int = 1 << 8;
     const GHOSTTY_MODS_SUPER_RIGHT: c_int = 1 << 9;
+    const DEFAULT_THEME_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ghostty-theme.ghostty");
 
     unsafe extern "C" {
         fn ghostty_init(argc: usize, argv: *mut *mut c_char) -> c_int;
         fn ghostty_config_new() -> *mut c_void;
         fn ghostty_config_free(config: *mut c_void);
         fn ghostty_config_load_default_files(config: *mut c_void);
+        fn ghostty_config_load_file(config: *mut c_void, path: *const c_char);
         fn ghostty_config_finalize(config: *mut c_void);
         fn ghostty_app_new(runtime_config: *const c_void, config: *mut c_void) -> *mut c_void;
         fn ghostty_app_free(app: *mut c_void);
@@ -113,6 +115,7 @@ mod macos {
                     }
 
                     ghostty_config_load_default_files(config);
+                    load_default_theme(config);
                     ghostty_config_finalize(config);
 
                     let runtime_config = rust_ghostty_runtime_config_ptr(runtime_bundle);
@@ -330,6 +333,14 @@ mod macos {
             }
         } else {
             CString::new(value).ok()
+        }
+    }
+
+    fn load_default_theme(config: *mut c_void) {
+        if let Ok(path) = CString::new(DEFAULT_THEME_PATH) {
+            unsafe {
+                ghostty_config_load_file(config, path.as_ptr());
+            }
         }
     }
 
