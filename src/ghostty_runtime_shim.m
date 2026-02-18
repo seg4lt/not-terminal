@@ -140,31 +140,26 @@ static void rust_ghostty_read_clipboard_cb(void *userdata,
                                            ghostty_clipboard_e location,
                                            void *state) {
   (void)location;
-  // userdata is now the runtime bundle (set via surface config)
+  // userdata is the runtime bundle (set via surface config)
   rust_ghostty_runtime_bundle_t *bundle =
       (rust_ghostty_runtime_bundle_t *)userdata;
   if (bundle == NULL) {
-    NSLog(@"Ghostty clipboard read: NULL userdata (bundle)");
     return;
   }
 
   ghostty_surface_t surface = (ghostty_surface_t)bundle->surface;
   if (surface == NULL) {
-    NSLog(@"Ghostty clipboard read: NULL surface from bundle");
     return;
   }
 
-  NSLog(@"Ghostty clipboard read: reading from pasteboard, state=%p", state);
   NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
   NSString *content = [pasteboard stringForType:NSPasteboardTypeString];
   if (content == nil) {
     content = @"";
   }
 
-  NSLog(@"Ghostty clipboard read: got content length %lu", [content length]);
   // Complete the clipboard request with the data
   ghostty_surface_complete_clipboard_request(surface, [content UTF8String], state, false);
-  NSLog(@"Ghostty clipboard read: completed request");
 }
 
 static void rust_ghostty_confirm_read_clipboard_cb(
@@ -173,9 +168,9 @@ static void rust_ghostty_confirm_read_clipboard_cb(
     void *state,
     ghostty_clipboard_request_e request) {
   (void)userdata;
+  (void)value;
   (void)state;
   (void)request;
-  NSLog(@"Ghostty confirm clipboard read: value=%s", value ? value : "(null)");
   // This is called after read_clipboard to confirm/paste the data
   // The value has already been provided to Ghostty via complete_clipboard_request
 }
