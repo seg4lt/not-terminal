@@ -237,7 +237,7 @@ rust_ghostty_runtime_bundle_t *rust_ghostty_runtime_bundle_new(void) {
 
   bundle->state = state;
   bundle->surface = NULL;
-  bundle->config.userdata = NULL;  // Will be set to surface after surface is created
+  bundle->config.userdata = state;  // Used by action callbacks via ghostty_app_userdata
   bundle->config.supports_selection_clipboard = false;
   bundle->config.wakeup_cb = rust_ghostty_wakeup_cb;
   bundle->config.action_cb = rust_ghostty_action_cb;

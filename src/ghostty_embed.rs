@@ -431,7 +431,8 @@ mod macos {
                 composing: false,
             };
 
-            unsafe { ghostty_surface_key_is_binding(self.surface, input, ptr::null_mut()) }
+            let result = unsafe { ghostty_surface_key_is_binding(self.surface, input, ptr::null_mut()) };
+            result
         }
 
         pub fn drain_actions(&mut self) -> Vec<GhosttyRuntimeAction> {
@@ -461,7 +462,7 @@ mod macos {
         }
 
         pub fn handle_keyboard_event(&mut self, event: &KeyboardEvent) -> bool {
-            match event {
+            let result = match event {
                 KeyboardEvent::ModifiersChanged(modifiers) => {
                     self.modifiers = *modifiers;
                     false
@@ -511,7 +512,8 @@ mod macos {
                         None,
                     )
                 }
-            }
+            };
+            result
         }
 
         pub fn handle_mouse_move(&mut self, x: f64, y: f64, modifiers: Modifiers) {
