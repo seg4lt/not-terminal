@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 pub(crate) const SIDEBAR_WIDTH_EXPANDED: f32 = 248.0;
-pub(crate) const HEADER_HEIGHT: f32 = 32.0;
 const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
 
 #[derive(Debug, Clone)]
@@ -289,13 +288,7 @@ impl App {
     }
 
     pub(crate) fn header_height_logical(&self) -> f32 {
-        if self.sidebar_collapsed {
-            return 0.0;
-        }
-
-        HEADER_HEIGHT
-            .max(0.0)
-            .min(self.window_size.height.max(1.0) - 1.0)
+        0.0
     }
 
     pub(crate) fn terminal_frame_px(&self) -> (u32, u32, u32, u32) {

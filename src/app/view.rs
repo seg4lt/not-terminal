@@ -210,11 +210,19 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
     for project_idx in project_indices {
         let project = &app.persisted.projects[project_idx];
         let project_id = project.id.clone();
-        let active_project = app
-            .persisted
-            .active_project_id
-            .as_ref()
-            .is_some_and(|value| value == &project_id);
+        let active_project = if let Some(active_terminal_id) = active_terminal_id.as_ref() {
+            project.worktrees.iter().any(|worktree| {
+                worktree
+                    .terminals
+                    .iter()
+                    .any(|terminal| &terminal.id == active_terminal_id)
+            })
+        } else {
+            app.persisted
+                .active_project_id
+                .as_ref()
+                .is_some_and(|value| value == &project_id)
+        };
         let project_collapsed = App::project_collapsed(project);
         let project_terminal_count = project
             .worktrees

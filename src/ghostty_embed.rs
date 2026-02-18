@@ -6,6 +6,7 @@ mod macos {
     use iced::window::Window;
     use iced::window::raw_window_handle::RawWindowHandle;
     use std::ffi::{CString, c_char, c_int, c_void};
+    use std::path::{Path, PathBuf};
     use std::ptr;
 
     type GhosttyInitFn = unsafe extern "C" fn(usize, *mut *mut c_char) -> c_int;
@@ -159,7 +160,9 @@ mod macos {
                     }
 
                     ghostty_config_load_default_files(config);
-                    load_default_theme(config);
+                    if !has_user_ghostty_config() {
+                        load_default_theme(config);
+                    }
                     ghostty_config_finalize(config);
 
                     let runtime_config = rust_ghostty_runtime_config_ptr(runtime_bundle);
@@ -497,6 +500,41 @@ mod macos {
                 ghostty_config_load_file(config, path.as_ptr());
             }
         }
+    }
+
+    fn has_user_ghostty_config() -> bool {
+        user_ghostty_config_candidates()
+            .iter()
+            .any(|path| file_exists_and_non_empty(path))
+    }
+
+    fn file_exists_and_non_empty(path: &Path) -> bool {
+        path.metadata()
+            .map(|metadata| metadata.is_file() && metadata.len() > 0)
+            .unwrap_or(false)
+    }
+
+    fn user_ghostty_config_candidates() -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+
+        if let Some(config_dir) = dirs::config_dir() {
+            paths.push(config_dir.join("ghostty/config.ghostty"));
+            paths.push(config_dir.join("ghostty/config"));
+        }
+
+        if let Some(home_dir) = dirs::home_dir() {
+            paths.push(home_dir.join(".config/ghostty/config.ghostty"));
+            paths.push(home_dir.join(".config/ghostty/config"));
+
+            #[cfg(target_os = "macos")]
+            {
+                let app_support = home_dir.join("Library/Application Support/com.mitchellh.ghostty");
+                paths.push(app_support.join("config.ghostty"));
+                paths.push(app_support.join("config"));
+            }
+        }
+
+        paths
     }
 
     fn normalize_text_modifiers(modifiers: Modifiers, text: Option<&str>) -> Modifiers {
