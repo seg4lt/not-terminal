@@ -86,6 +86,14 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::Keyboard(event) => {
             if let keyboard::Event::ModifiersChanged(modifiers) = &event {
                 app.keyboard_modifiers = *modifiers;
+                // Forward modifier changes to ALL panes to keep their state in sync.
+                // This is important because when we switch panes, the new pane needs
+                // to know the current modifier state for key combinations like cmd+c/v.
+                for runtime in app.runtimes.values_mut() {
+                    for pane in runtime.panes_mut() {
+                        pane.update_modifiers(*modifiers);
+                    }
+                }
             }
 
             if app.suppress_next_key_release {
