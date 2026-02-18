@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 iced = "0.14"
+iced_term = "0.7"
+
+[build-dependencies]
+cc = "1.2"
