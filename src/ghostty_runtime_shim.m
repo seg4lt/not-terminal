@@ -41,6 +41,7 @@ typedef struct rust_ghostty_runtime_state_s {
 typedef struct rust_ghostty_runtime_bundle_s {
   rust_ghostty_runtime_state_t *state;
   ghostty_runtime_config_s config;
+  void *surface;  // Store surface pointer for clipboard callbacks
 } rust_ghostty_runtime_bundle_t;
 
 static void rust_ghostty_wakeup_cb(void *userdata) {
@@ -138,11 +139,22 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
 static void rust_ghostty_read_clipboard_cb(void *userdata,
                                            ghostty_clipboard_e location,
                                            void *state) {
-  (void)userdata;
   (void)location;
-  // state might be the surface pointer or contain it
-  // For now, let's try using state as the surface pointer
-  ghostty_surface_t surface = (ghostty_surface_t)state;
+  // userdata is the runtime state, which is part of the bundle
+  rust_ghostty_runtime_state_t *runtime_state =
+      (rust_ghostty_runtime_state_t *)userdata;
+  if (runtime_state == NULL || state == NULL) {
+    return;
+  }
+
+  // Get the bundle from the state - we need to find the surface
+  // The bundle structure has state first, then config, then surface
+  // We can use pointer arithmetic to get the bundle from the state
+  rust_ghostty_runtime_bundle_t *bundle =
+      (rust_ghostty_runtime_bundle_t *)((char *)runtime_state -
+                                       offsetof(rust_ghostty_runtime_bundle_t, state));
+
+  ghostty_surface_t surface = (ghostty_surface_t)bundle->surface;
   if (surface == NULL) {
     return;
   }
@@ -231,6 +243,7 @@ rust_ghostty_runtime_bundle_t *rust_ghostty_runtime_bundle_new(void) {
   }
 
   bundle->state = state;
+  bundle->surface = NULL;
   bundle->config.userdata = state;
   bundle->config.supports_selection_clipboard = false;
   bundle->config.wakeup_cb = rust_ghostty_wakeup_cb;
@@ -241,6 +254,14 @@ rust_ghostty_runtime_bundle_t *rust_ghostty_runtime_bundle_new(void) {
   bundle->config.close_surface_cb = rust_ghostty_close_surface_cb;
 
   return bundle;
+}
+
+void rust_ghostty_runtime_bundle_set_surface(
+    rust_ghostty_runtime_bundle_t *bundle,
+    void *surface) {
+  if (bundle != NULL) {
+    bundle->surface = surface;
+  }
 }
 
 void rust_ghostty_runtime_bundle_free(rust_ghostty_runtime_bundle_t *bundle) {

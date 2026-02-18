@@ -194,6 +194,7 @@ mod macos {
 
         fn rust_ghostty_runtime_bundle_new() -> *mut RuntimeBundle;
         fn rust_ghostty_runtime_bundle_free(bundle: *mut RuntimeBundle);
+        fn rust_ghostty_runtime_bundle_set_surface(bundle: *mut RuntimeBundle, surface: *mut c_void);
         fn rust_ghostty_runtime_config_ptr(bundle: *const RuntimeBundle) -> *const c_void;
         fn rust_ghostty_runtime_take_pending_tick(bundle: *const RuntimeBundle) -> bool;
         fn rust_ghostty_runtime_take_pending_action(
@@ -295,6 +296,9 @@ mod macos {
                     if surface.is_null() {
                         return Err(String::from("ghostty_surface_new returned null"));
                     }
+
+                    // Store the surface pointer in the runtime bundle for clipboard callbacks
+                    rust_ghostty_runtime_bundle_set_surface(runtime_bundle, surface);
 
                     ghostty_surface_set_content_scale(surface, scale_factor, scale_factor);
                     ghostty_surface_set_size(surface, width_px.max(1), height_px.max(1));
