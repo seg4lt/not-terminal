@@ -71,6 +71,16 @@ mod macos {
             scale_factor: f64,
             font_size_points: f32,
         ) -> *mut c_void;
+        fn rust_ghostty_host_view_new(parent_ns_view: *mut c_void) -> *mut c_void;
+        fn rust_ghostty_host_view_set_frame(
+            host_ns_view: *mut c_void,
+            x: f64,
+            y: f64,
+            width: f64,
+            height: f64,
+        );
+        fn rust_ghostty_host_view_set_hidden(host_ns_view: *mut c_void, hidden: bool);
+        fn rust_ghostty_host_view_free(host_ns_view: *mut c_void);
     }
 
     pub struct GhosttyEmbed {
@@ -325,6 +335,49 @@ mod macos {
         match handle.as_raw() {
             RawWindowHandle::AppKit(appkit) => Some(appkit.ns_view.as_ptr() as usize),
             _ => None,
+        }
+    }
+
+    pub fn host_view_new(parent_ns_view: usize) -> Option<usize> {
+        if parent_ns_view == 0 {
+            return None;
+        }
+
+        let raw = unsafe { rust_ghostty_host_view_new(parent_ns_view as *mut c_void) };
+        if raw.is_null() {
+            None
+        } else {
+            Some(raw as usize)
+        }
+    }
+
+    pub fn host_view_set_frame(host_ns_view: usize, x: f64, y: f64, width: f64, height: f64) {
+        if host_ns_view == 0 {
+            return;
+        }
+
+        unsafe {
+            rust_ghostty_host_view_set_frame(host_ns_view as *mut c_void, x, y, width, height);
+        }
+    }
+
+    pub fn host_view_set_hidden(host_ns_view: usize, hidden: bool) {
+        if host_ns_view == 0 {
+            return;
+        }
+
+        unsafe {
+            rust_ghostty_host_view_set_hidden(host_ns_view as *mut c_void, hidden);
+        }
+    }
+
+    pub fn host_view_free(host_ns_view: usize) {
+        if host_ns_view == 0 {
+            return;
+        }
+
+        unsafe {
+            rust_ghostty_host_view_free(host_ns_view as *mut c_void);
         }
     }
 
@@ -644,7 +697,10 @@ mod macos {
 }
 
 #[cfg(target_os = "macos")]
-pub use macos::{GhosttyEmbed, ns_view_ptr};
+pub use macos::{
+    GhosttyEmbed, host_view_free, host_view_new, host_view_set_frame, host_view_set_hidden,
+    ns_view_ptr,
+};
 
 #[cfg(not(target_os = "macos"))]
 pub struct GhosttyEmbed;
@@ -671,3 +727,17 @@ impl GhosttyEmbed {
 pub fn ns_view_ptr(_window: &dyn iced::window::Window) -> Option<usize> {
     None
 }
+
+#[cfg(not(target_os = "macos"))]
+pub fn host_view_new(_parent_ns_view: usize) -> Option<usize> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn host_view_set_frame(_host_ns_view: usize, _x: f64, _y: f64, _width: f64, _height: f64) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn host_view_set_hidden(_host_ns_view: usize, _hidden: bool) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn host_view_free(_host_ns_view: usize) {}

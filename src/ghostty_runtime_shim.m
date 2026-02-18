@@ -4,6 +4,8 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 
+#import <AppKit/AppKit.h>
+
 #include "../vendor/ghostty/include/ghostty.h"
 
 typedef struct rust_ghostty_runtime_state_s {
@@ -152,4 +154,59 @@ void *rust_ghostty_surface_new_macos(void *surface_new_fn_raw,
   config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW;
 
   return surface_new_fn(app, &config);
+}
+
+void *rust_ghostty_host_view_new(void *parent_ns_view) {
+  if (parent_ns_view == NULL) {
+    return NULL;
+  }
+
+  NSView *parent = (NSView *)parent_ns_view;
+  NSRect frame = parent.bounds;
+  NSView *host = [[NSView alloc] initWithFrame:frame];
+  if (host == nil) {
+    return NULL;
+  }
+
+  [host setHidden:YES];
+  [host setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+  [parent addSubview:host];
+
+  return (void *)host;
+}
+
+void rust_ghostty_host_view_set_frame(void *host_ns_view,
+                                      double x,
+                                      double y,
+                                      double width,
+                                      double height) {
+  if (host_ns_view == NULL) {
+    return;
+  }
+
+  NSView *host = (NSView *)host_ns_view;
+  NSRect frame = NSMakeRect((CGFloat)x,
+                            (CGFloat)y,
+                            (CGFloat)(width < 1.0 ? 1.0 : width),
+                            (CGFloat)(height < 1.0 ? 1.0 : height));
+  [host setFrame:frame];
+}
+
+void rust_ghostty_host_view_set_hidden(void *host_ns_view, bool hidden) {
+  if (host_ns_view == NULL) {
+    return;
+  }
+
+  NSView *host = (NSView *)host_ns_view;
+  [host setHidden:hidden ? YES : NO];
+}
+
+void rust_ghostty_host_view_free(void *host_ns_view) {
+  if (host_ns_view == NULL) {
+    return;
+  }
+
+  NSView *host = (NSView *)host_ns_view;
+  [host removeFromSuperview];
+  [host release];
 }

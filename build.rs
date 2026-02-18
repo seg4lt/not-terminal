@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/ghostty_runtime_shim.c");
+    println!("cargo:rerun-if-changed=src/ghostty_runtime_shim.m");
     println!("cargo:rerun-if-changed=vendor/ghostty/include/ghostty.h");
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -12,7 +12,7 @@ fn main() {
     }
 
     cc::Build::new()
-        .file("src/ghostty_runtime_shim.c")
+        .file("src/ghostty_runtime_shim.m")
         .include("vendor/ghostty/include")
         .flag_if_supported("-std=c11")
         .compile("ghostty_runtime_shim");
