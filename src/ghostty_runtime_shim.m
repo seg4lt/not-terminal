@@ -140,7 +140,21 @@ static void rust_ghostty_read_clipboard_cb(void *userdata,
                                            void *state) {
   (void)userdata;
   (void)location;
-  (void)state;
+  // state might be the surface pointer or contain it
+  // For now, let's try using state as the surface pointer
+  ghostty_surface_t surface = (ghostty_surface_t)state;
+  if (surface == NULL) {
+    return;
+  }
+
+  NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+  NSString *content = [pasteboard stringForType:NSPasteboardTypeString];
+  if (content == nil) {
+    content = @"";
+  }
+
+  // Complete the clipboard request with the data
+  ghostty_surface_complete_clipboard_request(surface, [content UTF8String], state, false);
 }
 
 static void rust_ghostty_confirm_read_clipboard_cb(
@@ -152,6 +166,8 @@ static void rust_ghostty_confirm_read_clipboard_cb(
   (void)value;
   (void)state;
   (void)request;
+  // This is called after read_clipboard to confirm/paste the data
+  // For now, we don't need to do anything special here
 }
 
 static void rust_ghostty_write_clipboard_cb(
@@ -162,9 +178,29 @@ static void rust_ghostty_write_clipboard_cb(
     bool requires_confirmation) {
   (void)userdata;
   (void)location;
-  (void)content;
-  (void)len;
   (void)requires_confirmation;
+  // userdata might contain info about which surface, but for write we
+  // don't need the surface pointer since we're just writing to pasteboard
+  if (content == NULL || len == 0) {
+    return;
+  }
+
+  NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+
+  // Find text/plain content
+  for (size_t i = 0; i < len; i++) {
+    if (content[i].mime == NULL || content[i].data == NULL) {
+      continue;
+    }
+
+    NSString *mime = [NSString stringWithUTF8String:content[i].mime];
+    if ([mime isEqualToString:@"text/plain"]) {
+      NSString *text = [NSString stringWithUTF8String:content[i].data];
+      [pasteboard clearContents];
+      [pasteboard setString:text forType:NSPasteboardTypeString];
+      break;
+    }
+  }
 }
 
 static void rust_ghostty_close_surface_cb(void *userdata, bool process_alive) {
