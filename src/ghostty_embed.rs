@@ -2,6 +2,7 @@
 mod macos {
     use iced::keyboard::key::{Code, Named, NativeCode, Physical};
     use iced::keyboard::{Event as KeyboardEvent, Key, Location, Modifiers};
+    use iced::mouse::Button as MouseButton;
     use iced::window::Window;
     use iced::window::raw_window_handle::RawWindowHandle;
     use std::ffi::{CString, c_char, c_int, c_void};
@@ -39,6 +40,22 @@ mod macos {
     const GHOSTTY_MODS_CTRL_RIGHT: c_int = 1 << 7;
     const GHOSTTY_MODS_ALT_RIGHT: c_int = 1 << 8;
     const GHOSTTY_MODS_SUPER_RIGHT: c_int = 1 << 9;
+    const GHOSTTY_SCROLL_MOD_PRECISION: c_int = 1;
+
+    const GHOSTTY_MOUSE_RELEASE: c_int = 0;
+    const GHOSTTY_MOUSE_PRESS: c_int = 1;
+    const GHOSTTY_MOUSE_UNKNOWN: c_int = 0;
+    const GHOSTTY_MOUSE_LEFT: c_int = 1;
+    const GHOSTTY_MOUSE_RIGHT: c_int = 2;
+    const GHOSTTY_MOUSE_MIDDLE: c_int = 3;
+    const GHOSTTY_MOUSE_FOUR: c_int = 4;
+    const GHOSTTY_MOUSE_FIVE: c_int = 5;
+    const GHOSTTY_MOUSE_SIX: c_int = 6;
+    const GHOSTTY_MOUSE_SEVEN: c_int = 7;
+    const GHOSTTY_MOUSE_EIGHT: c_int = 8;
+    const GHOSTTY_MOUSE_NINE: c_int = 9;
+    const GHOSTTY_MOUSE_TEN: c_int = 10;
+    const GHOSTTY_MOUSE_ELEVEN: c_int = 11;
     const DEFAULT_THEME_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ghostty-theme.ghostty");
 
     unsafe extern "C" {
@@ -59,6 +76,14 @@ mod macos {
         fn ghostty_surface_set_focus(surface: *mut c_void, focused: bool);
         fn ghostty_surface_refresh(surface: *mut c_void);
         fn ghostty_surface_key(surface: *mut c_void, event: GhosttyInputKey) -> bool;
+        fn ghostty_surface_mouse_button(
+            surface: *mut c_void,
+            state: c_int,
+            button: c_int,
+            mods: c_int,
+        ) -> bool;
+        fn ghostty_surface_mouse_pos(surface: *mut c_void, x: f64, y: f64, mods: c_int);
+        fn ghostty_surface_mouse_scroll(surface: *mut c_void, x: f64, y: f64, scroll_mods: c_int);
 
         fn rust_ghostty_runtime_bundle_new() -> *mut RuntimeBundle;
         fn rust_ghostty_runtime_bundle_free(bundle: *mut RuntimeBundle);
@@ -280,6 +305,46 @@ mod macos {
             }
         }
 
+        pub fn handle_mouse_move(&mut self, x: f64, y: f64, modifiers: Modifiers) {
+            unsafe {
+                ghostty_surface_mouse_pos(self.surface, x, y, ghostty_mods_basic(modifiers));
+            }
+        }
+
+        pub fn handle_mouse_button(
+            &mut self,
+            button: MouseButton,
+            pressed: bool,
+            modifiers: Modifiers,
+        ) -> bool {
+            let button = ghostty_mouse_button(button);
+            let state = if pressed {
+                GHOSTTY_MOUSE_PRESS
+            } else {
+                GHOSTTY_MOUSE_RELEASE
+            };
+
+            unsafe {
+                ghostty_surface_mouse_button(
+                    self.surface,
+                    state,
+                    button,
+                    ghostty_mods_basic(modifiers),
+                )
+            }
+        }
+
+        pub fn handle_mouse_scroll(&mut self, x: f64, y: f64, precision: bool) {
+            let mut scroll_mods: c_int = 0;
+            if precision {
+                scroll_mods |= GHOSTTY_SCROLL_MOD_PRECISION;
+            }
+
+            unsafe {
+                ghostty_surface_mouse_scroll(self.surface, x, y, scroll_mods);
+            }
+        }
+
         fn send_key_event(
             &self,
             action: c_int,
@@ -454,19 +519,7 @@ mod macos {
     }
 
     fn ghostty_mods(modifiers: Modifiers, key: &Key, location: &Location) -> c_int {
-        let mut bits = GHOSTTY_MODS_NONE;
-        if modifiers.shift() {
-            bits |= GHOSTTY_MODS_SHIFT;
-        }
-        if modifiers.control() {
-            bits |= GHOSTTY_MODS_CTRL;
-        }
-        if modifiers.alt() {
-            bits |= GHOSTTY_MODS_ALT;
-        }
-        if modifiers.logo() {
-            bits |= GHOSTTY_MODS_SUPER;
-        }
+        let mut bits = ghostty_mods_basic(modifiers);
 
         if *location == Location::Right {
             if matches!(key.as_ref(), Key::Named(iced::keyboard::key::Named::Shift)) {
@@ -491,6 +544,47 @@ mod macos {
         }
 
         bits
+    }
+
+    fn ghostty_mods_basic(modifiers: Modifiers) -> c_int {
+        let mut bits = GHOSTTY_MODS_NONE;
+        if modifiers.shift() {
+            bits |= GHOSTTY_MODS_SHIFT;
+        }
+        if modifiers.control() {
+            bits |= GHOSTTY_MODS_CTRL;
+        }
+        if modifiers.alt() {
+            bits |= GHOSTTY_MODS_ALT;
+        }
+        if modifiers.logo() {
+            bits |= GHOSTTY_MODS_SUPER;
+        }
+        bits
+    }
+
+    fn ghostty_mouse_button(button: MouseButton) -> c_int {
+        match button {
+            MouseButton::Left => GHOSTTY_MOUSE_LEFT,
+            MouseButton::Right => GHOSTTY_MOUSE_RIGHT,
+            MouseButton::Middle => GHOSTTY_MOUSE_MIDDLE,
+            MouseButton::Back => GHOSTTY_MOUSE_FOUR,
+            MouseButton::Forward => GHOSTTY_MOUSE_FIVE,
+            MouseButton::Other(value) => match value {
+                0 => GHOSTTY_MOUSE_LEFT,
+                1 => GHOSTTY_MOUSE_RIGHT,
+                2 => GHOSTTY_MOUSE_MIDDLE,
+                3 => GHOSTTY_MOUSE_FOUR,
+                4 => GHOSTTY_MOUSE_FIVE,
+                5 => GHOSTTY_MOUSE_SIX,
+                6 => GHOSTTY_MOUSE_SEVEN,
+                7 => GHOSTTY_MOUSE_EIGHT,
+                8 => GHOSTTY_MOUSE_NINE,
+                9 => GHOSTTY_MOUSE_TEN,
+                10 => GHOSTTY_MOUSE_ELEVEN,
+                _ => GHOSTTY_MOUSE_UNKNOWN,
+            },
+        }
     }
 
     fn unshifted_codepoint(key: &Key, physical_key: &Physical) -> u32 {
@@ -721,6 +815,19 @@ impl GhosttyEmbed {
     }
 
     pub fn refresh(&mut self) {}
+
+    pub fn handle_mouse_move(&mut self, _x: f64, _y: f64, _modifiers: iced::keyboard::Modifiers) {}
+
+    pub fn handle_mouse_button(
+        &mut self,
+        _button: iced::mouse::Button,
+        _pressed: bool,
+        _modifiers: iced::keyboard::Modifiers,
+    ) -> bool {
+        false
+    }
+
+    pub fn handle_mouse_scroll(&mut self, _x: f64, _y: f64, _precision: bool) {}
 }
 
 #[cfg(not(target_os = "macos"))]
