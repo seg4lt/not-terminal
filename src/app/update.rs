@@ -291,6 +291,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             if open {
                 app.quick_open_open = false;
                 app.rename_dialog = None;
+                app.add_worktree_dialog = None;
             }
             app.sync_runtime_views();
             Task::none()
@@ -301,6 +302,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.quick_open_query.clear();
                 app.preferences_open = false;
                 app.rename_dialog = None;
+                app.add_worktree_dialog = None;
             }
             app.sync_runtime_views();
             if open {
@@ -339,10 +341,44 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.sync_runtime_views();
             app.save_task()
         }
+        Message::StartRenameProject(project_id) => {
+            app.start_rename_project(&project_id);
+            app.quick_open_open = false;
+            app.preferences_open = false;
+            app.add_worktree_dialog = None;
+            app.sync_runtime_views();
+            if app.rename_dialog.is_some() {
+                Task::batch([
+                    operation::focus("rename-input"),
+                    operation::move_cursor_to_end("rename-input"),
+                ])
+            } else {
+                Task::none()
+            }
+        }
+        Message::StartRenameWorktree {
+            project_id,
+            worktree_id,
+        } => {
+            app.start_rename_worktree(&project_id, &worktree_id);
+            app.quick_open_open = false;
+            app.preferences_open = false;
+            app.add_worktree_dialog = None;
+            app.sync_runtime_views();
+            if app.rename_dialog.is_some() {
+                Task::batch([
+                    operation::focus("rename-input"),
+                    operation::move_cursor_to_end("rename-input"),
+                ])
+            } else {
+                Task::none()
+            }
+        }
         Message::StartRenameFocused => {
             app.start_rename_focused();
             app.quick_open_open = false;
             app.preferences_open = false;
+            app.add_worktree_dialog = None;
             app.sync_runtime_views();
             if app.rename_dialog.is_some() {
                 Task::batch([
@@ -357,6 +393,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.start_rename_active_terminal();
             app.quick_open_open = false;
             app.preferences_open = false;
+            app.add_worktree_dialog = None;
             app.sync_runtime_views();
             if app.rename_dialog.is_some() {
                 Task::batch([
@@ -387,6 +424,65 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.sync_runtime_views();
             Task::none()
         }
+        Message::StartAddWorktree(project_id) => {
+            app.start_add_worktree(&project_id);
+            app.quick_open_open = false;
+            app.preferences_open = false;
+            app.rename_dialog = None;
+            app.sync_runtime_views();
+            if app.add_worktree_dialog.is_some() {
+                Task::batch([
+                    operation::focus("add-worktree-branch-input"),
+                    operation::move_cursor_to_end("add-worktree-branch-input"),
+                ])
+            } else {
+                Task::none()
+            }
+        }
+        Message::AddWorktreeBranchChanged(value) => {
+            if let Some(dialog) = app.add_worktree_dialog.as_mut() {
+                dialog.branch_name = value;
+            }
+            Task::none()
+        }
+        Message::AddWorktreePathChanged(value) => {
+            if let Some(dialog) = app.add_worktree_dialog.as_mut() {
+                dialog.destination_path = value;
+            }
+            Task::none()
+        }
+        Message::AddWorktreeCommit => match app.commit_add_worktree() {
+            Ok(()) => {
+                app.status = String::from("Worktree added");
+                app.ensure_active_runtime();
+                app.sync_runtime_views();
+                app.save_task()
+            }
+            Err(error) => {
+                app.status = format!("Failed to add worktree: {error}");
+                Task::none()
+            }
+        },
+        Message::AddWorktreeCancel => {
+            app.add_worktree_dialog = None;
+            app.sync_runtime_views();
+            Task::none()
+        }
+        Message::RemoveWorktree {
+            project_id,
+            worktree_id,
+        } => match app.remove_worktree(&project_id, &worktree_id) {
+            Ok(()) => {
+                app.status = String::from("Worktree removed");
+                app.ensure_active_runtime();
+                app.sync_runtime_views();
+                app.save_task()
+            }
+            Err(error) => {
+                app.status = format!("Failed to remove worktree: {error}");
+                Task::none()
+            }
+        },
         Message::SwitchTerminalByOffset(offset) => {
             app.switch_terminal_by_offset(offset);
             app.ensure_active_runtime();
@@ -449,6 +545,9 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             if app.rename_dialog.is_some() {
                 return update(app, Message::RenameCancel);
             }
+            if app.add_worktree_dialog.is_some() {
+                return update(app, Message::AddWorktreeCancel);
+            }
             if app.quick_open_open {
                 return update(app, Message::OpenQuickOpen(false));
             }
@@ -461,6 +560,9 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             app.suppress_next_key_release = true;
             if app.rename_dialog.is_some() {
                 return update(app, Message::RenameCommit);
+            }
+            if app.add_worktree_dialog.is_some() {
+                return update(app, Message::AddWorktreeCommit);
             }
             if app.quick_open_open {
                 return update(app, Message::QuickOpenSubmit);

@@ -2,6 +2,7 @@ use crate::app::model::{WorktreeInfo, infer_worktree_name};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub(crate) fn scan_worktrees(git_folder: &str) -> Result<Vec<WorktreeInfo>, String> {
     let repo_root = normalize_path(&PathBuf::from(git_folder))?;
@@ -82,6 +83,94 @@ pub(crate) fn scan_worktrees(git_folder: &str) -> Result<Vec<WorktreeInfo>, Stri
     }
 
     Ok(worktrees)
+}
+
+pub(crate) fn add_worktree(
+    git_folder: &str,
+    worktree_path: &str,
+    branch_name: &str,
+) -> Result<(), String> {
+    let destination = worktree_path.trim();
+    let branch = branch_name.trim();
+    if destination.is_empty() {
+        return Err(String::from("worktree path cannot be empty"));
+    }
+    if branch.is_empty() {
+        return Err(String::from("branch name cannot be empty"));
+    }
+
+    let primary = Command::new("git")
+        .arg("-C")
+        .arg(git_folder)
+        .arg("worktree")
+        .arg("add")
+        .arg(destination)
+        .arg(branch)
+        .output()
+        .map_err(|error| format!("failed to run git worktree add: {error}"))?;
+
+    if primary.status.success() {
+        return Ok(());
+    }
+
+    let fallback = Command::new("git")
+        .arg("-C")
+        .arg(git_folder)
+        .arg("worktree")
+        .arg("add")
+        .arg("-b")
+        .arg(branch)
+        .arg(destination)
+        .output()
+        .map_err(|error| format!("failed to run git worktree add -b: {error}"))?;
+
+    if fallback.status.success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "git worktree add failed: {}",
+        stderr_or_status(&fallback)
+    ))
+}
+
+pub(crate) fn remove_worktree(git_folder: &str, worktree_path: &str) -> Result<(), String> {
+    let target = worktree_path.trim();
+    if target.is_empty() {
+        return Err(String::from("worktree path cannot be empty"));
+    }
+
+    let primary = Command::new("git")
+        .arg("-C")
+        .arg(git_folder)
+        .arg("worktree")
+        .arg("remove")
+        .arg(target)
+        .output()
+        .map_err(|error| format!("failed to run git worktree remove: {error}"))?;
+
+    if primary.status.success() {
+        return Ok(());
+    }
+
+    let force = Command::new("git")
+        .arg("-C")
+        .arg(git_folder)
+        .arg("worktree")
+        .arg("remove")
+        .arg("--force")
+        .arg(target)
+        .output()
+        .map_err(|error| format!("failed to run git worktree remove --force: {error}"))?;
+
+    if force.status.success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "git worktree remove failed: {}",
+        stderr_or_status(&force)
+    ))
 }
 
 fn push_worktree(
@@ -187,5 +276,14 @@ fn normalize_path(path: &PathBuf) -> Result<PathBuf, String> {
         let cwd =
             std::env::current_dir().map_err(|e| format!("failed to resolve current dir: {e}"))?;
         Ok(cwd.join(path))
+    }
+}
+
+fn stderr_or_status(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!("exit status {}", output.status)
+    } else {
+        stderr
     }
 }

@@ -1,4 +1,4 @@
-use crate::app::git_worktrees::scan_worktrees;
+use crate::app::git_worktrees::{add_worktree, remove_worktree, scan_worktrees};
 use crate::app::model::{
     PersistedState, ProjectRecord, TerminalRecord, TreeStateRecord, UiState, WorktreeRecord,
     create_id, infer_project_name, next_project_name, next_terminal_name,
@@ -13,6 +13,7 @@ use iced::{
     window::{self},
 };
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 pub(crate) const SIDEBAR_WIDTH_EXPANDED: f32 = 248.0;
@@ -23,6 +24,10 @@ const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
 pub(crate) enum RenameTarget {
     Project {
         project_id: String,
+    },
+    Worktree {
+        project_id: String,
+        worktree_id: String,
     },
     Terminal {
         project_id: String,
@@ -35,6 +40,13 @@ pub(crate) enum RenameTarget {
 pub(crate) struct RenameDialog {
     pub(crate) target: RenameTarget,
     pub(crate) value: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AddWorktreeDialog {
+    pub(crate) project_id: String,
+    pub(crate) branch_name: String,
+    pub(crate) destination_path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +91,7 @@ pub(crate) struct App {
     pub(crate) quick_open_open: bool,
     pub(crate) quick_open_query: String,
     pub(crate) rename_dialog: Option<RenameDialog>,
+    pub(crate) add_worktree_dialog: Option<AddWorktreeDialog>,
     pub(crate) suppress_next_key_release: bool,
     pub(crate) branch_by_terminal: HashMap<String, String>,
     pub(crate) last_branch_refresh_terminal_id: Option<String>,
@@ -125,11 +138,25 @@ pub(crate) enum Message {
     QuickOpenQueryChanged(String),
     QuickOpenSubmit,
     QuickOpenSelect(String),
+    StartRenameProject(String),
+    StartRenameWorktree {
+        project_id: String,
+        worktree_id: String,
+    },
     StartRenameFocused,
     StartRenameTerminal,
     RenameValueChanged(String),
     RenameCommit,
     RenameCancel,
+    StartAddWorktree(String),
+    AddWorktreeBranchChanged(String),
+    AddWorktreePathChanged(String),
+    AddWorktreeCommit,
+    AddWorktreeCancel,
+    RemoveWorktree {
+        project_id: String,
+        worktree_id: String,
+    },
     SwitchTerminalByOffset(i32),
     ActiveBranchResolved {
         terminal_id: String,
@@ -156,6 +183,7 @@ impl App {
             quick_open_open: false,
             quick_open_query: String::new(),
             rename_dialog: None,
+            add_worktree_dialog: None,
             suppress_next_key_release: false,
             branch_by_terminal: HashMap::new(),
             last_branch_refresh_terminal_id: None,
@@ -606,7 +634,10 @@ impl App {
     }
 
     pub(crate) fn modal_open(&self) -> bool {
-        self.quick_open_open || self.preferences_open || self.rename_dialog.is_some()
+        self.quick_open_open
+            || self.preferences_open
+            || self.rename_dialog.is_some()
+            || self.add_worktree_dialog.is_some()
     }
 
     pub(crate) fn select_project(&mut self, project_id: &str) {
@@ -679,6 +710,7 @@ impl App {
                 .map(|worktree| WorktreeRecord {
                     id: worktree.id,
                     name: worktree.name,
+                    manual_name: false,
                     path: worktree.path,
                     missing: worktree.missing,
                     terminals: Vec::new(),
@@ -717,9 +749,18 @@ impl App {
 
         let project = &mut self.persisted.projects[project_idx];
 
-        let mut existing_terminals = HashMap::<String, Vec<TerminalRecord>>::new();
+        let mut existing_worktrees =
+            HashMap::<String, (Vec<TerminalRecord>, String, bool, String)>::new();
         for worktree in &project.worktrees {
-            existing_terminals.insert(worktree.path.clone(), worktree.terminals.clone());
+            existing_worktrees.insert(
+                worktree.path.clone(),
+                (
+                    worktree.terminals.clone(),
+                    worktree.name.clone(),
+                    worktree.manual_name,
+                    worktree.id.clone(),
+                ),
+            );
         }
 
         let active_before = project.selected_terminal_id.clone();
@@ -728,10 +769,13 @@ impl App {
 
         for info in scanned {
             seen.insert(info.path.clone());
-            let terminals = existing_terminals.remove(&info.path).unwrap_or_default();
+            let (terminals, name, manual_name, id) = existing_worktrees
+                .remove(&info.path)
+                .unwrap_or((Vec::new(), info.name.clone(), false, info.id.clone()));
             next_worktrees.push(WorktreeRecord {
-                id: info.id,
-                name: info.name,
+                id,
+                name: if manual_name { name } else { info.name },
+                manual_name,
                 path: info.path,
                 missing: info.missing,
                 terminals,
@@ -771,6 +815,97 @@ impl App {
         }
 
         self.normalize_selection();
+        Ok(())
+    }
+
+    pub(crate) fn start_add_worktree(&mut self, project_id: &str) {
+        let Some(project) = self
+            .persisted
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+        else {
+            return;
+        };
+
+        let Some(git_folder) = project.git_folder_path.as_ref() else {
+            return;
+        };
+
+        let branch_name = String::from("feature");
+        let destination_path = suggest_worktree_destination(git_folder, &branch_name);
+        self.add_worktree_dialog = Some(AddWorktreeDialog {
+            project_id: project_id.to_string(),
+            branch_name,
+            destination_path,
+        });
+    }
+
+    pub(crate) fn commit_add_worktree(&mut self) -> Result<(), String> {
+        let Some(dialog) = self.add_worktree_dialog.clone() else {
+            return Ok(());
+        };
+
+        let branch_name = dialog.branch_name.trim();
+        let destination_path = dialog.destination_path.trim();
+        if branch_name.is_empty() {
+            return Err(String::from("Branch name cannot be empty"));
+        }
+        if destination_path.is_empty() {
+            return Err(String::from("Destination path cannot be empty"));
+        }
+
+        let Some(project) = self
+            .persisted
+            .projects
+            .iter()
+            .find(|project| project.id == dialog.project_id)
+        else {
+            return Err(String::from("Project not found"));
+        };
+
+        let git_folder = project
+            .git_folder_path
+            .as_ref()
+            .ok_or_else(|| String::from("Project has no git folder configured"))?;
+
+        add_worktree(git_folder, destination_path, branch_name)?;
+        self.add_worktree_dialog = None;
+        self.rescan_project(&dialog.project_id)?;
+        Ok(())
+    }
+
+    pub(crate) fn remove_worktree(
+        &mut self,
+        project_id: &str,
+        worktree_id: &str,
+    ) -> Result<(), String> {
+        let Some(project_idx) = self
+            .persisted
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+        else {
+            return Ok(());
+        };
+
+        let git_folder = self.persisted.projects[project_idx]
+            .git_folder_path
+            .clone()
+            .ok_or_else(|| String::from("Project has no git folder configured"))?;
+
+        let worktree = self.persisted.projects[project_idx]
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.id == worktree_id)
+            .ok_or_else(|| String::from("Worktree not found"))?;
+
+        if worktree.path == git_folder {
+            return Err(String::from("Main worktree cannot be removed"));
+        }
+
+        remove_worktree(&git_folder, &worktree.path)?;
+        self.rescan_project(project_id)?;
         Ok(())
     }
 
@@ -893,12 +1028,53 @@ impl App {
 
         if let Some(project_idx) = self.active_project_index() {
             let project_id = self.persisted.projects[project_idx].id.clone();
-            let project_name = self.persisted.projects[project_idx].name.clone();
-            self.rename_dialog = Some(RenameDialog {
-                target: RenameTarget::Project { project_id },
-                value: project_name,
-            });
+            self.start_rename_project(&project_id);
         }
+    }
+
+    pub(crate) fn start_rename_project(&mut self, project_id: &str) {
+        let Some(project) = self
+            .persisted
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+        else {
+            return;
+        };
+
+        self.rename_dialog = Some(RenameDialog {
+            target: RenameTarget::Project {
+                project_id: project_id.to_string(),
+            },
+            value: project.name.clone(),
+        });
+    }
+
+    pub(crate) fn start_rename_worktree(&mut self, project_id: &str, worktree_id: &str) {
+        let Some(project) = self
+            .persisted
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+        else {
+            return;
+        };
+
+        let Some(worktree) = project
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.id == worktree_id)
+        else {
+            return;
+        };
+
+        self.rename_dialog = Some(RenameDialog {
+            target: RenameTarget::Worktree {
+                project_id: project_id.to_string(),
+                worktree_id: worktree_id.to_string(),
+            },
+            value: worktree.name.clone(),
+        });
     }
 
     pub(crate) fn start_rename_active_terminal(&mut self) {
@@ -946,6 +1122,24 @@ impl App {
                     .find(|project| project.id == project_id)
                 {
                     project.name = value.to_string();
+                }
+            }
+            RenameTarget::Worktree {
+                project_id,
+                worktree_id,
+            } => {
+                if let Some(project) = self
+                    .persisted
+                    .projects
+                    .iter_mut()
+                    .find(|project| project.id == project_id)
+                    && let Some(worktree) = project
+                        .worktrees
+                        .iter_mut()
+                        .find(|worktree| worktree.id == worktree_id)
+                {
+                    worktree.name = value.to_string();
+                    worktree.manual_name = true;
                 }
             }
             RenameTarget::Terminal {
@@ -1002,4 +1196,40 @@ fn toggle_in_list(values: &mut Vec<String>, target: &str) {
     } else {
         values.push(target.to_string());
     }
+}
+
+fn suggest_worktree_destination(git_folder: &str, branch_name: &str) -> String {
+    let root = PathBuf::from(git_folder);
+    let repo_name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("worktree");
+    let suffix = sanitize_branch_component(branch_name);
+    let name = if suffix.is_empty() {
+        format!("{repo_name}-worktree")
+    } else {
+        format!("{repo_name}-{suffix}")
+    };
+
+    root.parent()
+        .unwrap_or(root.as_path())
+        .join(name)
+        .to_string_lossy()
+        .to_string()
+}
+
+fn sanitize_branch_component(value: &str) -> String {
+    let filtered: String = value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    filtered.trim_matches('-').to_string()
 }

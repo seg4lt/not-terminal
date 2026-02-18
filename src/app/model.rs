@@ -47,6 +47,7 @@ pub(crate) struct ProjectRecord {
 pub(crate) struct WorktreeRecord {
     pub(crate) id: String,
     pub(crate) name: String,
+    pub(crate) manual_name: bool,
     pub(crate) path: String,
     pub(crate) missing: bool,
     pub(crate) terminals: Vec<TerminalRecord>,

@@ -81,7 +81,9 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
     let (context_label, branch_label) = if let Some(context) = app.active_terminal_context() {
         let breadcrumb = format!(
             "{} / {} / {}",
-            context.project_name, context.worktree_name, context.terminal_name
+            truncate_label(&context.project_name),
+            truncate_label(&context.worktree_name),
+            truncate_label(&context.terminal_name)
         );
         let branch = app.active_branch().unwrap_or_else(|| String::from("..."));
         (breadcrumb, branch)
@@ -149,7 +151,7 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                         .style(|_, status| tree_icon_button_style(status))
                         .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
                     monogram_chip(&project.name),
-                    button(text(project.name.clone()).size(15))
+                    button(text(truncate_label(&project.name)).size(15))
                         .padding([1, 1])
                         .style(move |_, status| tree_main_button_style(status, active_project))
                         .width(Length::Fill)
@@ -161,6 +163,14 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                     ))
                     .size(12)
                     .color(rgb(150, 156, 167)),
+                    button(text("w+").size(11))
+                        .padding([0, 5])
+                        .style(|_, status| row_action_style(status))
+                        .on_press(Message::StartAddWorktree(project_id.clone())),
+                    button(text("rn").size(11))
+                        .padding([0, 5])
+                        .style(|_, status| row_action_style(status))
+                        .on_press(Message::StartRenameProject(project_id.clone())),
                     button(text("↻").size(11))
                         .padding([0, 5])
                         .style(|_, status| row_action_style(status))
@@ -207,7 +217,7 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                             text(worktree_badge(&worktree.path))
                                 .size(11)
                                 .color(rgb(145, 150, 162)),
-                            button(text(worktree.name.clone()).size(13))
+                            button(text(truncate_label(&worktree.name)).size(13))
                                 .padding([1, 1])
                                 .style(move |_, status| tree_main_button_style(
                                     status,
@@ -222,6 +232,20 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                                 .padding([0, 5])
                                 .style(|_, status| row_action_style(status))
                                 .on_press(Message::AddTerminal {
+                                    project_id: project_id.clone(),
+                                    worktree_id: worktree_id.clone(),
+                                }),
+                            button(text("rn").size(11))
+                                .padding([0, 5])
+                                .style(|_, status| row_action_style(status))
+                                .on_press(Message::StartRenameWorktree {
+                                    project_id: project_id.clone(),
+                                    worktree_id: worktree_id.clone(),
+                                }),
+                            button(text("x").size(11))
+                                .padding([0, 5])
+                                .style(|_, status| row_action_style(status))
+                                .on_press(Message::RemoveWorktree {
                                     project_id: project_id.clone(),
                                     worktree_id: worktree_id.clone(),
                                 }),
@@ -257,7 +281,7 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                                     } else {
                                         rgb(126, 131, 140)
                                     }),
-                                    button(text(terminal.name.clone()).size(14))
+                                    button(text(truncate_label(&terminal.name)).size(14))
                                         .padding([1, 2])
                                         .style(move |_, status| {
                                             tree_main_button_style(status, terminal_active)
@@ -375,6 +399,7 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
     if let Some(dialog) = &app.rename_dialog {
         let title = match dialog.target {
             super::state::RenameTarget::Project { .. } => "Rename Project",
+            super::state::RenameTarget::Worktree { .. } => "Rename Worktree",
             super::state::RenameTarget::Terminal { .. } => "Rename Terminal",
         };
 
@@ -403,6 +428,52 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
         )
         .padding(12)
         .width(Length::Fixed(420.0))
+        .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
+    if let Some(dialog) = &app.add_worktree_dialog {
+        let panel = container(
+            iced::widget::column![
+                text("Add Worktree").size(16),
+                text_input("Branch name", &dialog.branch_name)
+                    .id("add-worktree-branch-input")
+                    .on_input(Message::AddWorktreeBranchChanged)
+                    .on_submit(Message::AddWorktreeCommit)
+                    .padding(6)
+                    .size(14)
+                    .style(|_, status| input_style(status))
+                    .width(Length::Fill),
+                text_input("Destination path", &dialog.destination_path)
+                    .on_input(Message::AddWorktreePathChanged)
+                    .on_submit(Message::AddWorktreeCommit)
+                    .padding(6)
+                    .size(14)
+                    .style(|_, status| input_style(status))
+                    .width(Length::Fill),
+                row![
+                    button(text("Cancel").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::AddWorktreeCancel),
+                    button(text("Create").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::AddWorktreeCommit),
+                ]
+                .spacing(8),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fixed(520.0))
         .style(|_| modal_panel_style());
 
         return Some(
@@ -484,6 +555,10 @@ fn worktree_badge(path: &str) -> &'static str {
     } else {
         "[M]"
     }
+}
+
+fn truncate_label(value: &str) -> String {
+    value.chars().take(15).collect()
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> Color {
