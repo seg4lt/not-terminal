@@ -297,7 +297,6 @@ impl RuntimeSession {
                 };
 
                 self.active_pane_id = order[next].clone();
-                self.reset_all_pane_modifiers();
                 if self.zoomed_pane_id.is_some() {
                     self.zoomed_pane_id = Some(self.active_pane_id.clone());
                 }
@@ -382,7 +381,6 @@ impl RuntimeSession {
                 };
 
                 self.active_pane_id = target_id.clone();
-                self.reset_all_pane_modifiers();
                 if self.zoomed_pane_id.is_some() {
                     self.zoomed_pane_id = Some(self.active_pane_id.clone());
                 }
@@ -477,15 +475,6 @@ impl RuntimeSession {
         }
 
         true
-    }
-
-    fn reset_all_pane_modifiers(&mut self) {
-        // Reset modifier state on all panes when switching focus via split nav.
-        // This prevents the new pane from inheriting stuck modifier state from
-        // the previous pane (e.g., cmd key still appearing pressed after cmd+h/j/k/l).
-        for pane in self.panes.values_mut() {
-            pane.ghostty.reset_modifiers();
-        }
     }
 
     fn clear_active_input_modes(&mut self) {
