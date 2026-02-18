@@ -451,7 +451,8 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::QuickOpenSubmit => {
-            if let Some(entry) = app.quick_open_entries().first().cloned() {
+            let entries = app.quick_open_entries();
+            if let Some(entry) = entries.get(app.quick_open_selected_index) {
                 app.select_terminal_by_id(&entry.terminal_id);
                 if let Err(error) = app.ensure_runtime_for_terminal(&entry.terminal_id) {
                     app.status = error;
