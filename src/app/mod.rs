@@ -1,3 +1,8 @@
+mod git_worktrees;
+mod model;
+mod persistence;
+mod runtime;
+mod shortcuts;
 mod state;
 mod update;
 mod view;

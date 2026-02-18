@@ -84,6 +84,11 @@ mod macos {
         ) -> bool;
         fn ghostty_surface_mouse_pos(surface: *mut c_void, x: f64, y: f64, mods: c_int);
         fn ghostty_surface_mouse_scroll(surface: *mut c_void, x: f64, y: f64, scroll_mods: c_int);
+        fn ghostty_surface_binding_action(
+            surface: *mut c_void,
+            action_ptr: *const u8,
+            action_len: usize,
+        ) -> bool;
 
         fn rust_ghostty_runtime_bundle_new() -> *mut RuntimeBundle;
         fn rust_ghostty_runtime_bundle_free(bundle: *mut RuntimeBundle);
@@ -343,6 +348,14 @@ mod macos {
             unsafe {
                 ghostty_surface_mouse_scroll(self.surface, x, y, scroll_mods);
             }
+        }
+
+        pub fn binding_action(&mut self, action: &str) -> bool {
+            if action.is_empty() {
+                return false;
+            }
+
+            unsafe { ghostty_surface_binding_action(self.surface, action.as_ptr(), action.len()) }
         }
 
         fn send_key_event(
@@ -828,6 +841,10 @@ impl GhosttyEmbed {
     }
 
     pub fn handle_mouse_scroll(&mut self, _x: f64, _y: f64, _precision: bool) {}
+
+    pub fn binding_action(&mut self, _action: &str) -> bool {
+        false
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
