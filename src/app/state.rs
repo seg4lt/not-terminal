@@ -4,9 +4,10 @@ use crate::app::model::{
     create_id, infer_project_name, next_project_name, next_terminal_name,
 };
 use crate::app::persistence;
-use crate::app::runtime::RuntimeSession;
+use crate::app::runtime::{PaneRuntime, RuntimeSession};
 use crate::ghostty_embed::{
-    GhosttyEmbed, host_view_new, host_view_set_frame, host_view_set_hidden, ns_view_ptr,
+    GhosttyEmbed, GhosttyGotoSplitDirection, GhosttyRuntimeAction, host_view_free, host_view_new,
+    ns_view_ptr,
 };
 use iced::{
     Point, Size, Subscription, Task, keyboard,
@@ -319,7 +320,36 @@ impl App {
             return None;
         }
 
-        Some(((position.x - x) as f64, (position.y - y) as f64))
+        let local_x = position.x - x;
+        let local_y = position.y - y;
+        let active_terminal_id = self.active_terminal_id()?;
+        if let Some(runtime) = self.runtimes.get(&active_terminal_id) {
+            return runtime.active_pane_local(local_x, local_y, width, height);
+        }
+
+        Some((local_x as f64, local_y as f64))
+    }
+
+    pub(crate) fn focus_terminal_pane_from_position(
+        &mut self,
+        position: Point,
+    ) -> Option<(f64, f64, bool)> {
+        let (x, y, width, height) = self.terminal_frame_logical();
+        let within_x = position.x >= x && position.x < x + width;
+        let within_y = position.y >= y && position.y < y + height;
+
+        if !(within_x && within_y) {
+            return None;
+        }
+
+        let local_x = position.x - x;
+        let local_y = position.y - y;
+        let active_terminal_id = self.active_terminal_id()?;
+        if let Some(runtime) = self.runtimes.get_mut(&active_terminal_id) {
+            return runtime.focus_pane_at(local_x, local_y, width, height);
+        }
+
+        Some((local_x as f64, local_y as f64, false))
     }
 
     pub(crate) fn normalize_selection(&mut self) {
@@ -640,41 +670,10 @@ impl App {
             return Ok(());
         }
 
-        let Some(parent_ns_view) = self.host_ns_view else {
-            return Ok(());
-        };
-
-        let (_, _, width_px, height_px) = self.terminal_frame_px();
-        let scale = self.window_scale_factor.max(0.1) as f64;
-        let working_directory = self.find_terminal_locator(terminal_id).and_then(|locator| {
-            self.persisted
-                .projects
-                .get(locator.project_idx)
-                .and_then(|project| project.worktrees.get(locator.worktree_idx))
-                .map(|worktree| worktree.path.clone())
-        });
-
-        let Some(host_view) = host_view_new(parent_ns_view) else {
-            return Err(String::from("failed to create terminal host view"));
-        };
-
-        let ghostty = match GhosttyEmbed::new(
-            host_view,
-            width_px,
-            height_px,
-            scale,
-            working_directory.as_deref(),
-        ) {
-            Ok(value) => value,
-            Err(error) => {
-                return Err(format!("failed to initialize terminal runtime: {error}"));
-            }
-        };
-
-        self.runtimes.insert(
-            terminal_id.to_string(),
-            RuntimeSession::new(host_view, ghostty),
-        );
+        let working_directory = self.terminal_working_directory(terminal_id);
+        let pane = self.create_pane_runtime(working_directory.as_deref())?;
+        self.runtimes
+            .insert(terminal_id.to_string(), RuntimeSession::new(pane));
 
         Ok(())
     }
@@ -691,12 +690,24 @@ impl App {
         let active_terminal_id = self.active_terminal_id()?;
         self.runtimes
             .get_mut(&active_terminal_id)
-            .map(|runtime| &mut runtime.ghostty)
+            .and_then(|runtime| runtime.active_ghostty_mut())
+    }
+
+    pub(crate) fn goto_split_in_active_runtime(
+        &mut self,
+        direction: GhosttyGotoSplitDirection,
+    ) -> bool {
+        let Some(active_terminal_id) = self.active_terminal_id() else {
+            return false;
+        };
+        let (_, _, width, height) = self.terminal_frame_logical();
+        self.runtimes
+            .get_mut(&active_terminal_id)
+            .is_some_and(|runtime| runtime.goto_split_from_surface(0, direction, width, height))
     }
 
     pub(crate) fn sync_runtime_views(&mut self) {
         let (x_logical, y_logical, width_logical, height_logical) = self.terminal_frame_logical();
-        let (_, _, width_px, height_px) = self.terminal_frame_px();
         let scale = self.window_scale_factor.max(0.1) as f64;
         let active_terminal_id = self.active_terminal_id();
         let modal_open = self.modal_open();
@@ -706,23 +717,114 @@ impl App {
                 && active_terminal_id
                     .as_ref()
                     .is_some_and(|id| id == terminal_id);
-
-            host_view_set_frame(
-                runtime.host_view,
-                x_logical as f64,
-                y_logical as f64,
-                width_logical as f64,
-                height_logical as f64,
+            runtime.apply_layout(
+                x_logical,
+                y_logical,
+                width_logical,
+                height_logical,
+                active,
+                scale,
             );
-            host_view_set_hidden(runtime.host_view, !active);
+        }
+    }
 
-            runtime.ghostty.set_scale_factor(scale);
-            runtime.ghostty.set_size(width_px, height_px);
-            runtime.ghostty.set_focus(active);
-            if active {
-                runtime.ghostty.refresh();
+    fn terminal_working_directory(&self, terminal_id: &str) -> Option<String> {
+        self.find_terminal_locator(terminal_id).and_then(|locator| {
+            self.persisted
+                .projects
+                .get(locator.project_idx)
+                .and_then(|project| project.worktrees.get(locator.worktree_idx))
+                .map(|worktree| worktree.path.clone())
+        })
+    }
+
+    fn create_pane_runtime(&self, working_directory: Option<&str>) -> Result<PaneRuntime, String> {
+        let Some(parent_ns_view) = self.host_ns_view else {
+            return Err(String::from("failed to resolve host NSView"));
+        };
+
+        let (_, _, width_px, height_px) = self.terminal_frame_px();
+        let scale = self.window_scale_factor.max(0.1) as f64;
+        let Some(host_view) = host_view_new(parent_ns_view) else {
+            return Err(String::from("failed to create terminal host view"));
+        };
+
+        let ghostty =
+            match GhosttyEmbed::new(host_view, width_px, height_px, scale, working_directory) {
+                Ok(value) => value,
+                Err(error) => {
+                    host_view_free(host_view);
+                    return Err(format!("failed to initialize terminal runtime: {error}"));
+                }
+            };
+
+        Ok(PaneRuntime::new(create_id("pane"), host_view, ghostty))
+    }
+
+    pub(crate) fn process_runtime_actions(&mut self) -> bool {
+        let mut changed = false;
+        let terminal_ids: Vec<String> = self.runtimes.keys().cloned().collect();
+        let (.., width, height) = self.terminal_frame_logical();
+
+        for terminal_id in terminal_ids {
+            let actions = if let Some(runtime) = self.runtimes.get_mut(&terminal_id) {
+                runtime.drain_actions()
+            } else {
+                continue;
+            };
+
+            for action in actions {
+                let action_changed = match action {
+                    GhosttyRuntimeAction::NewSplit {
+                        surface_ptr,
+                        direction,
+                    } => {
+                        let working_directory = self.terminal_working_directory(&terminal_id);
+                        let pane = match self.create_pane_runtime(working_directory.as_deref()) {
+                            Ok(pane) => pane,
+                            Err(error) => {
+                                self.status = error;
+                                continue;
+                            }
+                        };
+
+                        self.runtimes.get_mut(&terminal_id).is_some_and(|runtime| {
+                            runtime.split_from_surface(surface_ptr, direction, pane)
+                        })
+                    }
+                    GhosttyRuntimeAction::GotoSplit {
+                        surface_ptr,
+                        direction,
+                    } => self.runtimes.get_mut(&terminal_id).is_some_and(|runtime| {
+                        runtime.goto_split_from_surface(surface_ptr, direction, width, height)
+                    }),
+                    GhosttyRuntimeAction::ResizeSplit {
+                        surface_ptr,
+                        direction,
+                        amount,
+                    } => self.runtimes.get_mut(&terminal_id).is_some_and(|runtime| {
+                        runtime.resize_split_from_surface(surface_ptr, direction, amount)
+                    }),
+                    GhosttyRuntimeAction::EqualizeSplits { .. } => self
+                        .runtimes
+                        .get_mut(&terminal_id)
+                        .is_some_and(|runtime| runtime.equalize_splits()),
+                    GhosttyRuntimeAction::ToggleSplitZoom { surface_ptr } => self
+                        .runtimes
+                        .get_mut(&terminal_id)
+                        .is_some_and(|runtime| runtime.toggle_split_zoom_from_surface(surface_ptr)),
+                    GhosttyRuntimeAction::NewTab { .. } | GhosttyRuntimeAction::GotoTab { .. } => {
+                        self.status =
+                            String::from("Ghostty tab actions are not supported in this app yet");
+                        false
+                    }
+                };
+
+                changed = changed || action_changed;
             }
         }
+
+        changed
     }
 
     pub(crate) fn remove_runtime(&mut self, terminal_id: &str) {

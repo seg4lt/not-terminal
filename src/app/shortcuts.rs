@@ -75,7 +75,7 @@ pub(crate) fn detect_shortcut(
         return Some(ShortcutAction::RenameFocused);
     }
 
-    let primary = modifiers.logo() || modifiers.control();
+    let primary = modifiers.logo();
     if !primary {
         return None;
     }

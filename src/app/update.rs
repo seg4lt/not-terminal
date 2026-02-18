@@ -1,5 +1,7 @@
 use super::shortcuts::{ShortcutAction, detect_shortcut};
 use super::state::{App, Message};
+use crate::ghostty_embed::{GhosttyGotoSplitDirection, disable_system_hide_shortcuts};
+use iced::keyboard::key::{Code, Key, Physical};
 use iced::{Task, keyboard, mouse, widget::operation, window};
 
 pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
@@ -15,6 +17,9 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::HostViewResolved(ns_view) => {
             app.host_ns_view = ns_view;
+            if ns_view.is_some() {
+                disable_system_hide_shortcuts();
+            }
             if ns_view.is_none() {
                 app.status = String::from("Failed to resolve AppKit NSView");
             }
@@ -70,8 +75,12 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::GhosttyTick => {
+            let mut layout_changed = false;
             for runtime in app.runtimes.values_mut() {
-                runtime.ghostty.tick_if_needed();
+                layout_changed |= runtime.tick_all();
+            }
+            if app.process_runtime_actions() || layout_changed {
+                app.sync_runtime_views();
             }
             Task::none()
         }
@@ -95,12 +104,65 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
             let allow_plain_rename = app.active_terminal_id().is_none();
             let modal_open = app.modal_open();
-            if let Some(action) = detect_shortcut(&event, allow_plain_rename, modal_open) {
-                return apply_shortcut(app, action);
+            let shortcut_action = detect_shortcut(&event, allow_plain_rename, modal_open);
+            if modal_open {
+                if let Some(
+                    action @ (ShortcutAction::ModalCancel
+                    | ShortcutAction::ModalSubmit
+                    | ShortcutAction::ModalFocusNext
+                    | ShortcutAction::ModalFocusPrevious),
+                ) = shortcut_action
+                {
+                    return apply_shortcut(app, action);
+                }
+                return Task::none();
             }
 
-            if modal_open {
+            if matches!(
+                shortcut_action,
+                Some(
+                    ShortcutAction::ToggleSidebar
+                        | ShortcutAction::NewTerminal
+                        | ShortcutAction::NewDetachedTerminal
+                        | ShortcutAction::CloseActiveTerminal
+                        | ShortcutAction::OpenQuickOpen
+                )
+            ) {
+                if let Some(action) = shortcut_action {
+                    return apply_shortcut(app, action);
+                }
+            }
+
+            if let Some(direction) = forced_split_nav_action(&event) {
+                if app.goto_split_in_active_runtime(direction) {
+                    app.sync_runtime_views();
+                }
                 return Task::none();
+            }
+
+            let ghostty_claims_binding = app
+                .active_ghostty_mut()
+                .is_some_and(|ghostty| ghostty.key_event_is_binding(&event));
+            if ghostty_claims_binding {
+                let mut should_refresh_branch = false;
+                if let Some(ghostty) = app.active_ghostty_mut()
+                    && ghostty.handle_keyboard_event(&event)
+                {
+                    ghostty.refresh();
+                    ghostty.force_tick();
+                    should_refresh_branch = true;
+                }
+                if app.process_runtime_actions() {
+                    app.sync_runtime_views();
+                }
+                if should_refresh_branch {
+                    return app.refresh_active_branch_task();
+                }
+                return Task::none();
+            }
+
+            if let Some(action) = shortcut_action {
+                return apply_shortcut(app, action);
             }
 
             let mut should_refresh_branch = false;
@@ -110,6 +172,9 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 ghostty.refresh();
                 ghostty.force_tick();
                 should_refresh_branch = true;
+            }
+            if app.process_runtime_actions() {
+                app.sync_runtime_views();
             }
 
             if should_refresh_branch {
@@ -143,9 +208,24 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 }
                 mouse::Event::ButtonPressed(button) | mouse::Event::ButtonReleased(button) => {
                     let pressed = matches!(event, mouse::Event::ButtonPressed(_));
-                    let local = app
-                        .cursor_position_logical
-                        .and_then(|position| app.terminal_local_from_position(position));
+                    let mut focus_changed = false;
+                    let local = if pressed {
+                        app.cursor_position_logical.and_then(|position| {
+                            app.focus_terminal_pane_from_position(position).map(
+                                |(x, y, changed)| {
+                                    focus_changed = changed;
+                                    (x, y)
+                                },
+                            )
+                        })
+                    } else {
+                        app.cursor_position_logical
+                            .and_then(|position| app.terminal_local_from_position(position))
+                    };
+
+                    if focus_changed {
+                        app.sync_runtime_views();
+                    }
 
                     if let Some((x, y)) = local
                         && let Some(ghostty) = app.active_ghostty_mut()
@@ -647,4 +727,48 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
         ShortcutAction::ModalFocusNext => operation::focus_next(),
         ShortcutAction::ModalFocusPrevious => operation::focus_previous(),
     }
+}
+
+fn forced_split_nav_action(event: &keyboard::Event) -> Option<GhosttyGotoSplitDirection> {
+    let keyboard::Event::KeyPressed {
+        key,
+        modifiers,
+        physical_key,
+        ..
+    } = event
+    else {
+        return None;
+    };
+
+    if !modifiers.logo() || modifiers.control() || modifiers.alt() || modifiers.shift() {
+        return None;
+    }
+
+    let key_char = match key.as_ref() {
+        Key::Character(value) => Some(value.to_lowercase()),
+        _ => None,
+    };
+
+    if matches!(key_char.as_deref(), Some("h"))
+        || matches!(physical_key, Physical::Code(Code::KeyH))
+    {
+        return Some(GhosttyGotoSplitDirection::Left);
+    }
+    if matches!(key_char.as_deref(), Some("j"))
+        || matches!(physical_key, Physical::Code(Code::KeyJ))
+    {
+        return Some(GhosttyGotoSplitDirection::Down);
+    }
+    if matches!(key_char.as_deref(), Some("k"))
+        || matches!(physical_key, Physical::Code(Code::KeyK))
+    {
+        return Some(GhosttyGotoSplitDirection::Up);
+    }
+    if matches!(key_char.as_deref(), Some("l"))
+        || matches!(physical_key, Physical::Code(Code::KeyL))
+    {
+        return Some(GhosttyGotoSplitDirection::Right);
+    }
+
+    None
 }

@@ -1,5 +1,65 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttySplitDirection {
+    Right,
+    Down,
+    Left,
+    Up,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyGotoSplitDirection {
+    Previous,
+    Next,
+    Up,
+    Left,
+    Down,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyResizeSplitDirection {
+    Up,
+    Left,
+    Down,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GhosttyRuntimeAction {
+    NewSplit {
+        surface_ptr: usize,
+        direction: GhosttySplitDirection,
+    },
+    GotoSplit {
+        surface_ptr: usize,
+        direction: GhosttyGotoSplitDirection,
+    },
+    ResizeSplit {
+        surface_ptr: usize,
+        direction: GhosttyResizeSplitDirection,
+        amount: u16,
+    },
+    EqualizeSplits {
+        surface_ptr: usize,
+    },
+    ToggleSplitZoom {
+        surface_ptr: usize,
+    },
+    NewTab {
+        surface_ptr: usize,
+    },
+    GotoTab {
+        surface_ptr: usize,
+        direction: i32,
+    },
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
+    use super::{
+        GhosttyGotoSplitDirection, GhosttyResizeSplitDirection, GhosttyRuntimeAction,
+        GhosttySplitDirection,
+    };
     use iced::keyboard::key::{Code, Named, NativeCode, Physical};
     use iced::keyboard::{Event as KeyboardEvent, Key, Location, Modifiers};
     use iced::mouse::Button as MouseButton;
@@ -28,9 +88,44 @@ mod macos {
         composing: bool,
     }
 
+    #[repr(C)]
+    #[derive(Copy, Clone, Default)]
+    struct RuntimeQueuedAction {
+        tag: u32,
+        surface: usize,
+        arg0: i32,
+        amount: u16,
+        reserved: u16,
+    }
+
     const GHOSTTY_ACTION_RELEASE: c_int = 0;
     const GHOSTTY_ACTION_PRESS: c_int = 1;
     const GHOSTTY_ACTION_REPEAT: c_int = 2;
+
+    const RUST_GHOSTTY_ACTION_NEW_SPLIT: u32 = 1;
+    const RUST_GHOSTTY_ACTION_GOTO_SPLIT: u32 = 2;
+    const RUST_GHOSTTY_ACTION_RESIZE_SPLIT: u32 = 3;
+    const RUST_GHOSTTY_ACTION_EQUALIZE_SPLITS: u32 = 4;
+    const RUST_GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM: u32 = 5;
+    const RUST_GHOSTTY_ACTION_NEW_TAB: u32 = 6;
+    const RUST_GHOSTTY_ACTION_GOTO_TAB: u32 = 7;
+
+    const GHOSTTY_SPLIT_DIRECTION_RIGHT: i32 = 0;
+    const GHOSTTY_SPLIT_DIRECTION_DOWN: i32 = 1;
+    const GHOSTTY_SPLIT_DIRECTION_LEFT: i32 = 2;
+    const GHOSTTY_SPLIT_DIRECTION_UP: i32 = 3;
+
+    const GHOSTTY_GOTO_SPLIT_PREVIOUS: i32 = 0;
+    const GHOSTTY_GOTO_SPLIT_NEXT: i32 = 1;
+    const GHOSTTY_GOTO_SPLIT_UP: i32 = 2;
+    const GHOSTTY_GOTO_SPLIT_LEFT: i32 = 3;
+    const GHOSTTY_GOTO_SPLIT_DOWN: i32 = 4;
+    const GHOSTTY_GOTO_SPLIT_RIGHT: i32 = 5;
+
+    const GHOSTTY_RESIZE_SPLIT_UP: i32 = 0;
+    const GHOSTTY_RESIZE_SPLIT_DOWN: i32 = 1;
+    const GHOSTTY_RESIZE_SPLIT_LEFT: i32 = 2;
+    const GHOSTTY_RESIZE_SPLIT_RIGHT: i32 = 3;
 
     const GHOSTTY_MODS_NONE: c_int = 0;
     const GHOSTTY_MODS_SHIFT: c_int = 1 << 0;
@@ -72,11 +167,17 @@ mod macos {
         fn ghostty_app_set_focus(app: *mut c_void, focused: bool);
         fn ghostty_surface_new(app: *mut c_void, config: *const c_void) -> *mut c_void;
         fn ghostty_surface_free(surface: *mut c_void);
+        fn ghostty_surface_process_exited(surface: *mut c_void) -> bool;
         fn ghostty_surface_set_size(surface: *mut c_void, width: u32, height: u32);
         fn ghostty_surface_set_content_scale(surface: *mut c_void, x: f64, y: f64);
         fn ghostty_surface_set_focus(surface: *mut c_void, focused: bool);
         fn ghostty_surface_refresh(surface: *mut c_void);
         fn ghostty_surface_key(surface: *mut c_void, event: GhosttyInputKey) -> bool;
+        fn ghostty_surface_key_is_binding(
+            surface: *mut c_void,
+            event: GhosttyInputKey,
+            flags: *mut c_int,
+        ) -> bool;
         fn ghostty_surface_mouse_button(
             surface: *mut c_void,
             state: c_int,
@@ -95,6 +196,11 @@ mod macos {
         fn rust_ghostty_runtime_bundle_free(bundle: *mut RuntimeBundle);
         fn rust_ghostty_runtime_config_ptr(bundle: *const RuntimeBundle) -> *const c_void;
         fn rust_ghostty_runtime_take_pending_tick(bundle: *const RuntimeBundle) -> bool;
+        fn rust_ghostty_runtime_take_pending_action(
+            bundle: *const RuntimeBundle,
+            out_action: *mut RuntimeQueuedAction,
+        ) -> bool;
+        fn rust_ghostty_runtime_action_queue_len(bundle: *const RuntimeBundle) -> u32;
         fn rust_ghostty_surface_new_macos(
             surface_new_fn_raw: *mut c_void,
             app: *mut c_void,
@@ -113,6 +219,7 @@ mod macos {
         );
         fn rust_ghostty_host_view_set_hidden(host_ns_view: *mut c_void, hidden: bool);
         fn rust_ghostty_host_view_free(host_ns_view: *mut c_void);
+        fn rust_ghostty_disable_system_hide_shortcuts();
     }
 
     pub struct GhosttyEmbed {
@@ -251,6 +358,10 @@ mod macos {
             }
         }
 
+        pub fn process_exited(&self) -> bool {
+            unsafe { ghostty_surface_process_exited(self.surface) }
+        }
+
         pub fn tick_if_needed(&mut self) {
             unsafe {
                 if rust_ghostty_runtime_take_pending_tick(self.runtime_bundle) {
@@ -263,6 +374,78 @@ mod macos {
             unsafe {
                 ghostty_app_tick(self.app);
             }
+        }
+
+        pub fn surface_ptr(&self) -> usize {
+            self.surface as usize
+        }
+
+        pub fn key_event_is_binding(&self, event: &KeyboardEvent) -> bool {
+            let KeyboardEvent::KeyPressed {
+                key,
+                physical_key,
+                modifiers,
+                location,
+                text,
+                repeat,
+                ..
+            } = event
+            else {
+                return false;
+            };
+
+            let mut effective_modifiers = self.modifiers | *modifiers;
+            apply_modifier_key_state(&mut effective_modifiers, key, true);
+            let action = if *repeat {
+                GHOSTTY_ACTION_REPEAT
+            } else {
+                GHOSTTY_ACTION_PRESS
+            };
+            let keycode = keycode_from_physical(physical_key);
+            let modifiers = normalize_text_modifiers(effective_modifiers, text.as_deref());
+            let mods = ghostty_mods(modifiers, key, location);
+            let unshifted_codepoint = unshifted_codepoint(key, physical_key);
+            let text_cstr = text.as_deref().and_then(to_c_string);
+            let input = GhosttyInputKey {
+                action,
+                mods,
+                consumed_mods: GHOSTTY_MODS_NONE,
+                keycode,
+                text: text_cstr
+                    .as_ref()
+                    .map(|s| s.as_ptr())
+                    .unwrap_or(ptr::null()),
+                unshifted_codepoint,
+                composing: false,
+            };
+
+            unsafe { ghostty_surface_key_is_binding(self.surface, input, ptr::null_mut()) }
+        }
+
+        pub fn drain_actions(&mut self) -> Vec<GhosttyRuntimeAction> {
+            let mut actions = Vec::new();
+
+            unsafe {
+                if rust_ghostty_runtime_action_queue_len(self.runtime_bundle) == 0 {
+                    return actions;
+                }
+            }
+
+            loop {
+                let mut raw = RuntimeQueuedAction::default();
+                let has_action = unsafe {
+                    rust_ghostty_runtime_take_pending_action(self.runtime_bundle, &mut raw)
+                };
+                if !has_action {
+                    break;
+                }
+
+                if let Some(action) = runtime_action_from_raw(raw) {
+                    actions.push(action);
+                }
+            }
+
+            actions
         }
 
         pub fn handle_keyboard_event(&mut self, event: &KeyboardEvent) -> bool {
@@ -468,6 +651,12 @@ mod macos {
         }
     }
 
+    pub fn disable_system_hide_shortcuts() {
+        unsafe {
+            rust_ghostty_disable_system_hide_shortcuts();
+        }
+    }
+
     fn to_c_string(value: &str) -> Option<CString> {
         if value.is_empty() {
             return None;
@@ -528,13 +717,78 @@ mod macos {
 
             #[cfg(target_os = "macos")]
             {
-                let app_support = home_dir.join("Library/Application Support/com.mitchellh.ghostty");
+                let app_support =
+                    home_dir.join("Library/Application Support/com.mitchellh.ghostty");
                 paths.push(app_support.join("config.ghostty"));
                 paths.push(app_support.join("config"));
             }
         }
 
         paths
+    }
+
+    fn runtime_action_from_raw(raw: RuntimeQueuedAction) -> Option<GhosttyRuntimeAction> {
+        match raw.tag {
+            RUST_GHOSTTY_ACTION_NEW_SPLIT => {
+                let direction = match raw.arg0 {
+                    GHOSTTY_SPLIT_DIRECTION_RIGHT => GhosttySplitDirection::Right,
+                    GHOSTTY_SPLIT_DIRECTION_DOWN => GhosttySplitDirection::Down,
+                    GHOSTTY_SPLIT_DIRECTION_LEFT => GhosttySplitDirection::Left,
+                    GHOSTTY_SPLIT_DIRECTION_UP => GhosttySplitDirection::Up,
+                    _ => return None,
+                };
+
+                Some(GhosttyRuntimeAction::NewSplit {
+                    surface_ptr: raw.surface,
+                    direction,
+                })
+            }
+            RUST_GHOSTTY_ACTION_GOTO_SPLIT => {
+                let direction = match raw.arg0 {
+                    GHOSTTY_GOTO_SPLIT_PREVIOUS => GhosttyGotoSplitDirection::Previous,
+                    GHOSTTY_GOTO_SPLIT_NEXT => GhosttyGotoSplitDirection::Next,
+                    GHOSTTY_GOTO_SPLIT_UP => GhosttyGotoSplitDirection::Up,
+                    GHOSTTY_GOTO_SPLIT_LEFT => GhosttyGotoSplitDirection::Left,
+                    GHOSTTY_GOTO_SPLIT_DOWN => GhosttyGotoSplitDirection::Down,
+                    GHOSTTY_GOTO_SPLIT_RIGHT => GhosttyGotoSplitDirection::Right,
+                    _ => return None,
+                };
+
+                Some(GhosttyRuntimeAction::GotoSplit {
+                    surface_ptr: raw.surface,
+                    direction,
+                })
+            }
+            RUST_GHOSTTY_ACTION_RESIZE_SPLIT => {
+                let direction = match raw.arg0 {
+                    GHOSTTY_RESIZE_SPLIT_UP => GhosttyResizeSplitDirection::Up,
+                    GHOSTTY_RESIZE_SPLIT_LEFT => GhosttyResizeSplitDirection::Left,
+                    GHOSTTY_RESIZE_SPLIT_DOWN => GhosttyResizeSplitDirection::Down,
+                    GHOSTTY_RESIZE_SPLIT_RIGHT => GhosttyResizeSplitDirection::Right,
+                    _ => return None,
+                };
+
+                Some(GhosttyRuntimeAction::ResizeSplit {
+                    surface_ptr: raw.surface,
+                    direction,
+                    amount: raw.amount,
+                })
+            }
+            RUST_GHOSTTY_ACTION_EQUALIZE_SPLITS => Some(GhosttyRuntimeAction::EqualizeSplits {
+                surface_ptr: raw.surface,
+            }),
+            RUST_GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM => Some(GhosttyRuntimeAction::ToggleSplitZoom {
+                surface_ptr: raw.surface,
+            }),
+            RUST_GHOSTTY_ACTION_NEW_TAB => Some(GhosttyRuntimeAction::NewTab {
+                surface_ptr: raw.surface,
+            }),
+            RUST_GHOSTTY_ACTION_GOTO_TAB => Some(GhosttyRuntimeAction::GotoTab {
+                surface_ptr: raw.surface,
+                direction: raw.arg0,
+            }),
+            _ => None,
+        }
     }
 
     fn normalize_text_modifiers(modifiers: Modifiers, text: Option<&str>) -> Modifiers {
@@ -853,8 +1107,8 @@ mod macos {
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    GhosttyEmbed, host_view_free, host_view_new, host_view_set_frame, host_view_set_hidden,
-    ns_view_ptr,
+    GhosttyEmbed, disable_system_hide_shortcuts, host_view_free, host_view_new,
+    host_view_set_frame, host_view_set_hidden, ns_view_ptr,
 };
 
 #[cfg(not(target_os = "macos"))]
@@ -914,3 +1168,6 @@ pub fn host_view_set_hidden(_host_ns_view: usize, _hidden: bool) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn host_view_free(_host_ns_view: usize) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn disable_system_hide_shortcuts() {}

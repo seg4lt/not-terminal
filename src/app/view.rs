@@ -160,8 +160,12 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
 
     if app.persisted.detached_terminals.is_empty() {
         detached_column = detached_column.push(
-            container(text("No detached terminals").size(11).color(rgb(130, 135, 145)))
-                .padding([8, 12]),
+            container(
+                text("No detached terminals")
+                    .size(11)
+                    .color(rgb(130, 135, 145)),
+            )
+            .padding([8, 12]),
         );
     } else {
         for terminal in &app.persisted.detached_terminals {
@@ -211,10 +215,8 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
     if project_indices.is_empty() {
         list = list.push(
             container(
-                row![
-                    text("No projects yet").size(11).color(rgb(130, 135, 145)),
-                ]
-                .align_y(Alignment::Center)
+                row![text("No projects yet").size(11).color(rgb(130, 135, 145)),]
+                    .align_y(Alignment::Center),
             )
             .padding([12, 12])
             .style(|_| empty_state_style()),
@@ -430,10 +432,8 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
 
     list = list.push(
         container(
-            row![
-                text(app.status.clone()).size(10).color(rgb(135, 140, 150)),
-            ]
-            .align_y(Alignment::Center)
+            row![text(app.status.clone()).size(10).color(rgb(135, 140, 150)),]
+                .align_y(Alignment::Center),
         )
         .padding([10, 10])
         .style(|_| status_bar_style()),
@@ -565,12 +565,13 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 text_input("Branch name", &dialog.branch_name)
                     .id("add-worktree-branch-input")
                     .on_input(Message::AddWorktreeBranchChanged)
-                    .on_submit(Message::AddWorktreeCommit)
+                    .on_submit(Message::FocusAddWorktreePath)
                     .padding(6)
                     .size(14)
                     .style(|_, status| input_style(status))
                     .width(Length::Fill),
                 text_input("Destination path", &dialog.destination_path)
+                    .id("add-worktree-path-input")
                     .on_input(Message::AddWorktreePathChanged)
                     .on_submit(Message::AddWorktreeCommit)
                     .padding(6)
@@ -619,15 +620,15 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                     .label("Show native title bar")
                     .on_toggle(Message::SetShowNativeTitleBar)
                     .text_size(13),
-                text("Cmd/Ctrl+1: Toggle sidebar").size(12),
-                text("Cmd/Ctrl+T: New terminal in active worktree").size(12),
-                text("Cmd/Ctrl+Shift+T: New detached terminal").size(12),
-                text("Cmd/Ctrl+W: Close active terminal").size(12),
-                text("Cmd/Ctrl+P: Quick open").size(12),
-                text("Cmd/Ctrl+, : Preferences").size(12),
-                text("Cmd/Ctrl+=/-/0: Font size").size(12),
-                text("Cmd/Ctrl+Shift+[ or ]: Previous/Next terminal").size(12),
-                text("Cmd/Ctrl+R: Rename active terminal").size(12),
+                text("Cmd+1: Toggle sidebar").size(12),
+                text("Cmd+T: New terminal in active worktree").size(12),
+                text("Cmd+Shift+T: New detached terminal").size(12),
+                text("Cmd+W: Close active terminal").size(12),
+                text("Cmd+P: Quick open").size(12),
+                text("Cmd+, : Preferences").size(12),
+                text("Cmd+=/-/0: Font size").size(12),
+                text("Cmd+Shift+[ or ]: Previous/Next terminal").size(12),
+                text("Cmd+R: Rename active terminal").size(12),
                 text("F2: Rename focused item").size(12),
             ]
             .spacing(6),
