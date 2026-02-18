@@ -63,9 +63,9 @@ mod macos {
     use iced::keyboard::key::{Code, Named, NativeCode, Physical};
     use iced::keyboard::{Event as KeyboardEvent, Key, Location, Modifiers};
     use iced::mouse::Button as MouseButton;
-    use iced::window::Window;
     use iced::window::raw_window_handle::RawWindowHandle;
-    use std::ffi::{CString, c_char, c_int, c_void};
+    use iced::window::Window;
+    use std::ffi::{c_char, c_int, c_void, CString};
     use std::path::{Path, PathBuf};
     use std::ptr;
 
@@ -398,7 +398,7 @@ mod macos {
                 return false;
             };
 
-            let mut effective_modifiers = self.modifiers | *modifiers;
+            let mut effective_modifiers = *modifiers;
             apply_modifier_key_state(&mut effective_modifiers, key, true);
             let action = if *repeat {
                 GHOSTTY_ACTION_REPEAT
@@ -406,10 +406,11 @@ mod macos {
                 GHOSTTY_ACTION_PRESS
             };
             let keycode = keycode_from_physical(physical_key);
-            let modifiers = normalize_text_modifiers(effective_modifiers, text.as_deref());
+            let text = filter_key_text(text.as_deref());
+            let modifiers = normalize_text_modifiers(effective_modifiers, text);
             let mods = ghostty_mods(modifiers, key, location);
             let unshifted_codepoint = unshifted_codepoint(key, physical_key);
-            let text_cstr = text.as_deref().and_then(to_c_string);
+            let text_cstr = text.and_then(to_c_string);
             let input = GhosttyInputKey {
                 action,
                 mods,
@@ -423,7 +424,8 @@ mod macos {
                 composing: false,
             };
 
-            let result = unsafe { ghostty_surface_key_is_binding(self.surface, input, ptr::null_mut()) };
+            let result =
+                unsafe { ghostty_surface_key_is_binding(self.surface, input, ptr::null_mut()) };
             result
         }
 
@@ -468,7 +470,7 @@ mod macos {
                     repeat,
                     ..
                 } => {
-                    let mut effective_modifiers = self.modifiers | *modifiers;
+                    let mut effective_modifiers = *modifiers;
                     apply_modifier_key_state(&mut effective_modifiers, key, true);
                     self.modifiers = effective_modifiers;
                     let action = if *repeat {
@@ -492,7 +494,7 @@ mod macos {
                     location,
                     ..
                 } => {
-                    let mut effective_modifiers = self.modifiers | *modifiers;
+                    let mut effective_modifiers = *modifiers;
                     apply_modifier_key_state(&mut effective_modifiers, key, false);
                     self.modifiers = effective_modifiers;
                     self.send_key_event(
@@ -566,6 +568,7 @@ mod macos {
             text: Option<&str>,
         ) -> bool {
             let keycode = keycode_from_physical(physical_key);
+            let text = filter_key_text(text);
             let modifiers = normalize_text_modifiers(modifiers, text);
             let mods = ghostty_mods(modifiers, key, location);
             let unshifted_codepoint = unshifted_codepoint(key, physical_key);
@@ -661,6 +664,13 @@ mod macos {
         unsafe {
             rust_ghostty_disable_system_hide_shortcuts();
         }
+    }
+
+    /// Filter text for key events, matching native macOS Ghostty behavior.
+    /// Control characters (first byte < 0x20) are not passed as text because
+    /// Ghostty handles control character encoding internally via `ctrlSeq`.
+    fn filter_key_text(text: Option<&str>) -> Option<&str> {
+        text.filter(|t| t.as_bytes().first().is_some_and(|&b| b >= 0x20))
     }
 
     fn to_c_string(value: &str) -> Option<CString> {
@@ -1113,8 +1123,8 @@ mod macos {
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    GhosttyEmbed, disable_system_hide_shortcuts, host_view_free, host_view_new,
-    host_view_set_frame, host_view_set_hidden, ns_view_ptr,
+    disable_system_hide_shortcuts, host_view_free, host_view_new, host_view_set_frame,
+    host_view_set_hidden, ns_view_ptr, GhosttyEmbed,
 };
 
 #[cfg(not(target_os = "macos"))]

@@ -85,6 +85,11 @@ pub(crate) fn detect_shortcut(
         return Some(ShortcutAction::RenameFocused);
     }
 
+    // Never intercept ctrl combinations - let them pass to terminal
+    if modifiers.control() {
+        return None;
+    }
+
     let primary = modifiers.logo();
     if !primary {
         return None;
