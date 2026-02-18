@@ -285,6 +285,16 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.status = String::from("Detached terminal added");
             app.save_task()
         }
+        Message::CloseActiveTerminal => {
+            if app.close_active_terminal() {
+                app.ensure_active_runtime();
+                app.sync_runtime_views();
+                app.status = String::from("Terminal closed");
+                app.save_task()
+            } else {
+                Task::none()
+            }
+        }
         Message::SelectTerminal {
             project_id,
             terminal_id,
@@ -574,6 +584,7 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             }
         }
         ShortcutAction::NewDetachedTerminal => update(app, Message::AddDetachedTerminal),
+        ShortcutAction::CloseActiveTerminal => update(app, Message::CloseActiveTerminal),
         ShortcutAction::OpenQuickOpen => update(app, Message::OpenQuickOpen(true)),
         ShortcutAction::OpenPreferences => update(app, Message::OpenPreferences(true)),
         ShortcutAction::RenameTerminal => update(app, Message::StartRenameTerminal),

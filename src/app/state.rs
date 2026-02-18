@@ -128,6 +128,7 @@ pub(crate) enum Message {
         worktree_id: String,
     },
     AddDetachedTerminal,
+    CloseActiveTerminal,
     SelectTerminal {
         project_id: String,
         terminal_id: String,
@@ -1154,6 +1155,34 @@ impl App {
 
         self.remove_runtime(terminal_id);
         self.normalize_selection();
+    }
+
+    pub(crate) fn close_active_terminal(&mut self) -> bool {
+        let Some(active_terminal_id) = self.active_terminal_id() else {
+            return false;
+        };
+
+        if let Some(locator) = self.find_terminal_locator(&active_terminal_id) {
+            let project_id = self.persisted.projects[locator.project_idx].id.clone();
+            let worktree_id = self.persisted.projects[locator.project_idx].worktrees
+                [locator.worktree_idx]
+                .id
+                .clone();
+            self.remove_terminal(&project_id, &worktree_id, &active_terminal_id);
+            return true;
+        }
+
+        if self
+            .persisted
+            .detached_terminals
+            .iter()
+            .any(|terminal| terminal.id == active_terminal_id)
+        {
+            self.remove_detached_terminal(&active_terminal_id);
+            return true;
+        }
+
+        false
     }
 
     pub(crate) fn start_rename_focused(&mut self) {
