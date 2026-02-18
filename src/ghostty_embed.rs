@@ -1,6 +1,6 @@
 #[cfg(target_os = "macos")]
 mod macos {
-    use iced::keyboard::key::{Code, NativeCode, Physical};
+    use iced::keyboard::key::{Code, Named, NativeCode, Physical};
     use iced::keyboard::{Event as KeyboardEvent, Key, Location, Modifiers};
     use iced::window::Window;
     use iced::window::raw_window_handle::RawWindowHandle;
@@ -78,6 +78,7 @@ mod macos {
         config: *mut c_void,
         app: *mut c_void,
         surface: *mut c_void,
+        modifiers: Modifiers,
     }
 
     impl GhosttyEmbed {
@@ -172,6 +173,7 @@ mod macos {
                 config,
                 app,
                 surface,
+                modifiers: Modifiers::default(),
             })
         }
 
@@ -216,6 +218,10 @@ mod macos {
 
         pub fn handle_keyboard_event(&mut self, event: &KeyboardEvent) -> bool {
             match event {
+                KeyboardEvent::ModifiersChanged(modifiers) => {
+                    self.modifiers = *modifiers;
+                    false
+                }
                 KeyboardEvent::KeyPressed {
                     key,
                     physical_key,
@@ -225,6 +231,9 @@ mod macos {
                     repeat,
                     ..
                 } => {
+                    let mut effective_modifiers = self.modifiers | *modifiers;
+                    apply_modifier_key_state(&mut effective_modifiers, key, true);
+                    self.modifiers = effective_modifiers;
                     let action = if *repeat {
                         GHOSTTY_ACTION_REPEAT
                     } else {
@@ -234,7 +243,7 @@ mod macos {
                         action,
                         key,
                         physical_key,
-                        modifiers,
+                        effective_modifiers,
                         location,
                         text.as_deref(),
                     )
@@ -245,29 +254,34 @@ mod macos {
                     modifiers,
                     location,
                     ..
-                } => self.send_key_event(
-                    GHOSTTY_ACTION_RELEASE,
-                    key,
-                    physical_key,
-                    modifiers,
-                    location,
-                    None,
-                ),
-                KeyboardEvent::ModifiersChanged(_) => false,
+                } => {
+                    let mut effective_modifiers = self.modifiers | *modifiers;
+                    apply_modifier_key_state(&mut effective_modifiers, key, false);
+                    self.modifiers = effective_modifiers;
+                    self.send_key_event(
+                        GHOSTTY_ACTION_RELEASE,
+                        key,
+                        physical_key,
+                        effective_modifiers,
+                        location,
+                        None,
+                    )
+                }
             }
         }
 
         fn send_key_event(
-            &mut self,
+            &self,
             action: c_int,
             key: &Key,
             physical_key: &Physical,
-            modifiers: &Modifiers,
+            modifiers: Modifiers,
             location: &Location,
             text: Option<&str>,
         ) -> bool {
             let keycode = keycode_from_physical(physical_key);
-            let mods = ghostty_mods(*modifiers, key, location);
+            let modifiers = normalize_text_modifiers(modifiers, text);
+            let mods = ghostty_mods(modifiers, key, location);
             let unshifted_codepoint = unshifted_codepoint(key, physical_key);
             let text_cstr = text.and_then(to_c_string);
             let input = GhosttyInputKey {
@@ -341,6 +355,48 @@ mod macos {
             unsafe {
                 ghostty_config_load_file(config, path.as_ptr());
             }
+        }
+    }
+
+    fn normalize_text_modifiers(modifiers: Modifiers, text: Option<&str>) -> Modifiers {
+        let Some(text) = text else {
+            return modifiers;
+        };
+
+        let mut chars = text.chars();
+        let Some(first) = chars.next() else {
+            return modifiers;
+        };
+        if chars.next().is_some() || first.is_control() {
+            return modifiers;
+        }
+
+        if modifiers.shift() && !modifiers.control() && !modifiers.alt() && !modifiers.logo() {
+            let mut normalized = modifiers;
+            normalized.remove(Modifiers::SHIFT);
+            normalized
+        } else {
+            modifiers
+        }
+    }
+
+    fn apply_modifier_key_state(modifiers: &mut Modifiers, key: &Key, pressed: bool) {
+        let mut set = |flag: Modifiers| {
+            if pressed {
+                modifiers.insert(flag);
+            } else {
+                modifiers.remove(flag);
+            }
+        };
+
+        match key.as_ref() {
+            Key::Named(Named::Shift) => set(Modifiers::SHIFT),
+            Key::Named(Named::Control) => set(Modifiers::CTRL),
+            Key::Named(Named::Alt) | Key::Named(Named::AltGraph) => set(Modifiers::ALT),
+            Key::Named(Named::Super) | Key::Named(Named::Meta) | Key::Named(Named::Hyper) => {
+                set(Modifiers::LOGO)
+            }
+            _ => {}
         }
     }
 

@@ -1,14 +1,13 @@
 mod ghostty_embed;
 
 use ghostty_embed::{GhosttyEmbed, ns_view_ptr};
-use iced::widget::{button, column, container, row, text};
-use iced::{Alignment, Length, Subscription, Task, window};
+use iced::widget::{container, text};
+use iced::{Length, Subscription, Task, window};
 use iced_term::settings::{BackendSettings, Settings as TerminalSettings};
 use iced_term::{Command as TerminalCommand, Event as TerminalEvent, Terminal, TerminalView};
 
 struct App {
     title: String,
-    counter: i32,
     terminal: Terminal,
     window_id: Option<window::Id>,
     window_size: iced::Size,
@@ -21,8 +20,6 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Increment,
-    Decrement,
     Terminal(TerminalEvent),
     WindowLocated(Option<window::Id>),
     HostViewResolved(Option<usize>),
@@ -31,7 +28,6 @@ enum Message {
     WindowEvent(window::Id, window::Event),
     GhosttyTick,
     Keyboard(iced::keyboard::Event),
-    RetryGhosttyInit,
 }
 
 impl App {
@@ -52,7 +48,6 @@ impl App {
 
         let app = Self {
             title: String::from("Iced + Embedded Terminal"),
-            counter: 0,
             terminal,
             window_id: None,
             window_size: iced::Size::new(1200.0, 780.0),
@@ -131,14 +126,6 @@ impl App {
 
 fn update(app: &mut App, message: Message) -> Task<Message> {
     match message {
-        Message::Increment => {
-            app.counter += 1;
-            Task::none()
-        }
-        Message::Decrement => {
-            app.counter -= 1;
-            Task::none()
-        }
         Message::Terminal(TerminalEvent::BackendCall(_, cmd)) => {
             match app.terminal.handle(TerminalCommand::ProxyToBackend(cmd)) {
                 iced_term::actions::Action::Shutdown => {
@@ -248,53 +235,15 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::RetryGhosttyInit => {
-            app.ghostty_attempted = false;
-            app.ghostty_status = String::from("Retrying Ghostty embed...");
-            app.try_init_ghostty();
-            Task::none()
-        }
     }
 }
 
 fn view(app: &App) -> iced::Element<'_, Message> {
-    if app.ghostty.is_some() {
-        return container(text(""))
-            .height(Length::Fill)
-            .width(Length::Fill)
-            .into();
-    }
-
-    let header = row![
-        text("Hello, world!"),
-        button("-").on_press(Message::Decrement),
-        text(app.counter.to_string()),
-        button("+").on_press(Message::Increment),
-    ]
-    .spacing(12)
-    .align_y(Alignment::Center);
-
-    let status_bar = row![
-        text(&app.ghostty_status),
-        button("Retry Ghostty").on_press(Message::RetryGhosttyInit),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
-
-    let content = container(TerminalView::show(&app.terminal).map(Message::Terminal))
+    let _ = app;
+    container(text(""))
         .height(Length::Fill)
-        .width(Length::Fill);
-
-    container(
-        column![header, status_bar, content]
-            .padding(12)
-            .spacing(12)
-            .height(Length::Fill)
-            .width(Length::Fill),
-    )
-    .height(Length::Fill)
-    .width(Length::Fill)
-    .into()
+        .width(Length::Fill)
+        .into()
 }
 
 fn main() -> iced::Result {
