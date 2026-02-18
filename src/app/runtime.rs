@@ -99,6 +99,10 @@ impl RuntimeSession {
             changed |= self.remove_pane(&pane_id);
         }
 
+        if changed {
+            self.clear_active_input_modes();
+        }
+
         changed
     }
 
@@ -471,6 +475,19 @@ impl RuntimeSession {
         }
 
         true
+    }
+
+    fn clear_active_input_modes(&mut self) {
+        let Some(active) = self.active_ghostty_mut() else {
+            return;
+        };
+
+        // Defensive reset for intermittent "stuck" leader/key-table state
+        // after split lifecycle changes.
+        let _ = active.binding_action("end_key_sequence");
+        let _ = active.binding_action("deactivate_all_key_tables");
+        active.refresh();
+        active.force_tick();
     }
 
     fn compute_layout(&self, width: f32, height: f32) -> Vec<(String, PaneRect)> {

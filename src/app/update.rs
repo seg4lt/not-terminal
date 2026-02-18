@@ -1,7 +1,6 @@
 use super::shortcuts::{ShortcutAction, detect_shortcut};
 use super::state::{App, Message};
-use crate::ghostty_embed::{GhosttyGotoSplitDirection, disable_system_hide_shortcuts};
-use iced::keyboard::key::{Code, Key, Physical};
+use crate::ghostty_embed::disable_system_hide_shortcuts;
 use iced::{Task, keyboard, mouse, widget::operation, window};
 
 pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
@@ -131,13 +130,6 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 if let Some(action) = shortcut_action {
                     return apply_shortcut(app, action);
                 }
-            }
-
-            if let Some(direction) = forced_split_nav_action(&event) {
-                if app.goto_split_in_active_runtime(direction) {
-                    app.sync_runtime_views();
-                }
-                return Task::none();
             }
 
             let ghostty_claims_binding = app
@@ -727,48 +719,4 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
         ShortcutAction::ModalFocusNext => operation::focus_next(),
         ShortcutAction::ModalFocusPrevious => operation::focus_previous(),
     }
-}
-
-fn forced_split_nav_action(event: &keyboard::Event) -> Option<GhosttyGotoSplitDirection> {
-    let keyboard::Event::KeyPressed {
-        key,
-        modifiers,
-        physical_key,
-        ..
-    } = event
-    else {
-        return None;
-    };
-
-    if !modifiers.logo() || modifiers.control() || modifiers.alt() || modifiers.shift() {
-        return None;
-    }
-
-    let key_char = match key.as_ref() {
-        Key::Character(value) => Some(value.to_lowercase()),
-        _ => None,
-    };
-
-    if matches!(key_char.as_deref(), Some("h"))
-        || matches!(physical_key, Physical::Code(Code::KeyH))
-    {
-        return Some(GhosttyGotoSplitDirection::Left);
-    }
-    if matches!(key_char.as_deref(), Some("j"))
-        || matches!(physical_key, Physical::Code(Code::KeyJ))
-    {
-        return Some(GhosttyGotoSplitDirection::Down);
-    }
-    if matches!(key_char.as_deref(), Some("k"))
-        || matches!(physical_key, Physical::Code(Code::KeyK))
-    {
-        return Some(GhosttyGotoSplitDirection::Up);
-    }
-    if matches!(key_char.as_deref(), Some("l"))
-        || matches!(physical_key, Physical::Code(Code::KeyL))
-    {
-        return Some(GhosttyGotoSplitDirection::Right);
-    }
-
-    None
 }
