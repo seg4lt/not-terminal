@@ -140,20 +140,13 @@ static void rust_ghostty_read_clipboard_cb(void *userdata,
                                            ghostty_clipboard_e location,
                                            void *state) {
   (void)location;
-  // userdata is the runtime state, which is part of the bundle
-  rust_ghostty_runtime_state_t *runtime_state =
-      (rust_ghostty_runtime_state_t *)userdata;
-  if (runtime_state == NULL) {
-    NSLog(@"Ghostty clipboard read: NULL userdata");
+  // userdata is now the runtime bundle (set via surface config)
+  rust_ghostty_runtime_bundle_t *bundle =
+      (rust_ghostty_runtime_bundle_t *)userdata;
+  if (bundle == NULL) {
+    NSLog(@"Ghostty clipboard read: NULL userdata (bundle)");
     return;
   }
-
-  // Get the bundle from the state - we need to find the surface
-  // The bundle structure has state first, then config, then surface
-  // We can use pointer arithmetic to get the bundle from the state
-  rust_ghostty_runtime_bundle_t *bundle =
-      (rust_ghostty_runtime_bundle_t *)((char *)runtime_state -
-                                       offsetof(rust_ghostty_runtime_bundle_t, state));
 
   ghostty_surface_t surface = (ghostty_surface_t)bundle->surface;
   if (surface == NULL) {
@@ -170,7 +163,6 @@ static void rust_ghostty_read_clipboard_cb(void *userdata,
 
   NSLog(@"Ghostty clipboard read: got content length %lu", [content length]);
   // Complete the clipboard request with the data
-  // Note: state may be NULL, but we still need to complete the request
   ghostty_surface_complete_clipboard_request(surface, [content UTF8String], state, false);
   NSLog(@"Ghostty clipboard read: completed request");
 }
@@ -250,7 +242,7 @@ rust_ghostty_runtime_bundle_t *rust_ghostty_runtime_bundle_new(void) {
 
   bundle->state = state;
   bundle->surface = NULL;
-  bundle->config.userdata = state;
+  bundle->config.userdata = NULL;  // Will be set to surface after surface is created
   bundle->config.supports_selection_clipboard = false;
   bundle->config.wakeup_cb = rust_ghostty_wakeup_cb;
   bundle->config.action_cb = rust_ghostty_action_cb;
@@ -260,14 +252,6 @@ rust_ghostty_runtime_bundle_t *rust_ghostty_runtime_bundle_new(void) {
   bundle->config.close_surface_cb = rust_ghostty_close_surface_cb;
 
   return bundle;
-}
-
-void rust_ghostty_runtime_bundle_set_surface(
-    rust_ghostty_runtime_bundle_t *bundle,
-    void *surface) {
-  if (bundle != NULL) {
-    bundle->surface = surface;
-  }
 }
 
 void rust_ghostty_runtime_bundle_free(rust_ghostty_runtime_bundle_t *bundle) {
@@ -356,7 +340,8 @@ void *rust_ghostty_surface_new_macos(void *surface_new_fn_raw,
                                      void *ns_view,
                                      double scale_factor,
                                      float font_size_points,
-                                     const char *working_directory) {
+                                     const char *working_directory,
+                                     void *runtime_bundle) {
   if (surface_new_fn_raw == NULL || app == NULL || ns_view == NULL) {
     return NULL;
   }
@@ -364,6 +349,7 @@ void *rust_ghostty_surface_new_macos(void *surface_new_fn_raw,
   rust_ghostty_surface_new_fn surface_new_fn =
       (rust_ghostty_surface_new_fn)surface_new_fn_raw;
 
+  // Create a temporary config - userdata will be set after surface creation
   ghostty_surface_config_s config = {0};
   config.platform_tag = GHOSTTY_PLATFORM_MACOS;
   config.platform.macos.nsview = ns_view;
@@ -371,8 +357,16 @@ void *rust_ghostty_surface_new_macos(void *surface_new_fn_raw,
   config.font_size = font_size_points;
   config.working_directory = working_directory;
   config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW;
+  config.userdata = runtime_bundle;  // Pass the bundle so we can find it later
 
-  return surface_new_fn(app, &config);
+  void *surface = surface_new_fn(app, &config);
+  if (surface != NULL && runtime_bundle != NULL) {
+    rust_ghostty_runtime_bundle_t *bundle =
+        (rust_ghostty_runtime_bundle_t *)runtime_bundle;
+    bundle->surface = surface;
+  }
+
+  return surface;
 }
 
 void *rust_ghostty_host_view_new(void *parent_ns_view) {
