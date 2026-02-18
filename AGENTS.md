@@ -10,6 +10,20 @@ This repository embeds Ghostty into an Iced app on macOS. Use this file as the d
 4. Apple/AppKit official docs for Cocoa behavior.
 5. Web search only for missing context, and prefer official sources.
 
+## Online References (Primary)
+- Ghostty repo: https://github.com/ghostty-org/ghostty
+- Ghostty C API header (`libghostty`): https://github.com/ghostty-org/ghostty/blob/main/include/ghostty.h
+- Ghostty embedded apprt implementation: https://github.com/ghostty-org/ghostty/blob/main/src/apprt/embedded.zig
+- Ghostty surface behavior (input/scroll/viewport): https://github.com/ghostty-org/ghostty/blob/main/src/Surface.zig
+- Iced repo: https://github.com/iced-rs/iced
+- Iced API docs: https://docs.rs/iced/latest/iced/
+- Iced mouse events: https://docs.rs/iced/latest/iced/mouse/enum.Event.html
+- Iced source for input/window events:
+  - https://github.com/iced-rs/iced/blob/master/core/src/mouse/event.rs
+  - https://github.com/iced-rs/iced/blob/master/core/src/keyboard/event.rs
+  - https://github.com/iced-rs/iced/blob/master/core/src/window/event.rs
+- AppKit NSView docs: https://developer.apple.com/documentation/appkit/nsview
+
 ## Fast Commands
 - List project files: `rg --files`
 - Find symbols quickly: `rg -n "symbol_name" src vendor`
@@ -39,7 +53,8 @@ This repository embeds Ghostty into an Iced app on macOS. Use this file as the d
   - `iced_core-*/src/keyboard/event.rs`
 - Verify data space for all coordinates:
   - Iced pointer positions are logical units.
-  - Ghostty surface input expects pixel space for embedded view.
+  - `ghostty_surface_set_size` uses pixel size.
+  - `ghostty_surface_mouse_pos` receives host logical coordinates and embedded runtime scales internally.
 - Always handle:
   - `CursorMoved`
   - `CursorLeft`
@@ -55,16 +70,6 @@ This repository embeds Ghostty into an Iced app on macOS. Use this file as the d
   - resize propagation after window resize/rescale events
 - Verify focus routing and first-responder implications when keyboard input appears broken.
 - When behavior is unclear, confirm against Apple docs for `NSView`, event handling, and coordinate systems.
-
-## Elm Interop Research Playbook
-- Elm does not support arbitrary native FFI in Elm code.
-- Correct pattern is:
-  - Elm <-> JavaScript via ports.
-  - JavaScript <-> Rust (native process API, HTTP/WebSocket, or WASM boundary).
-- If using Elm + Rust/WASM:
-  - Validate message contracts at the port boundary.
-  - Keep terminal rendering/input logic in JS/native layer, not Elm runtime internals.
-- Source of truth for Elm interop semantics: official Elm guide/docs.
 
 ## Debugging Checklist for Input Bugs
 1. Confirm window focus and active session index.
