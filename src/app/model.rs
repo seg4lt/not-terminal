@@ -29,10 +29,31 @@ impl Default for PersistedState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct UiState {
     pub(crate) sidebar_collapsed: bool,
+    #[serde(default = "default_show_native_title_bar")]
+    pub(crate) show_native_title_bar: bool,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            sidebar_collapsed: false,
+            show_native_title_bar: default_show_native_title_bar(),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) const fn default_show_native_title_bar() -> bool {
+    false
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) const fn default_show_native_title_bar() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

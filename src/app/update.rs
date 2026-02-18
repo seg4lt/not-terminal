@@ -193,6 +193,16 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.sync_runtime_views();
             app.save_task()
         }
+        Message::SetShowNativeTitleBar(value) => {
+            let changed = app.show_native_title_bar != value;
+            app.show_native_title_bar = value;
+
+            if changed && let Some(window_id) = app.window_id {
+                Task::batch([window::toggle_decorations(window_id), app.save_task()])
+            } else {
+                app.save_task()
+            }
+        }
         Message::FilterChanged(value) => {
             app.filter_query = value;
             Task::none()

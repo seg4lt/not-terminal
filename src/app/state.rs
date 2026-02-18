@@ -89,6 +89,7 @@ pub(crate) struct App {
     pub(crate) status: String,
     pub(crate) filter_query: String,
     pub(crate) sidebar_collapsed: bool,
+    pub(crate) show_native_title_bar: bool,
     pub(crate) preferences_open: bool,
     pub(crate) quick_open_open: bool,
     pub(crate) quick_open_query: String,
@@ -113,6 +114,7 @@ pub(crate) enum Message {
     Keyboard(iced::keyboard::Event),
     Mouse(iced::mouse::Event),
     ToggleSidebar,
+    SetShowNativeTitleBar(bool),
     FilterChanged(String),
     AddProject,
     ProjectRescan(String),
@@ -185,6 +187,7 @@ impl App {
             status: String::from("Ready"),
             filter_query: String::new(),
             sidebar_collapsed: false,
+            show_native_title_bar: crate::app::initial_show_native_title_bar(),
             preferences_open: false,
             quick_open_open: false,
             quick_open_query: String::new(),
@@ -237,6 +240,7 @@ impl App {
     pub(crate) fn apply_loaded_state(&mut self, loaded: PersistedState) {
         self.persisted = loaded;
         self.sidebar_collapsed = self.persisted.ui.sidebar_collapsed;
+        self.show_native_title_bar = self.persisted.ui.show_native_title_bar;
         self.filter_query.clear();
         self.normalize_selection();
     }
@@ -245,6 +249,7 @@ impl App {
         let mut snapshot = self.persisted.clone();
         snapshot.ui = UiState {
             sidebar_collapsed: self.sidebar_collapsed,
+            show_native_title_bar: self.show_native_title_bar,
         };
 
         Task::perform(

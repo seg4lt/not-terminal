@@ -1,7 +1,7 @@
 use super::state::{App, Message};
 use iced::widget::{
-    button, container, container::Style as ContainerStyle, opaque, row, scrollable, stack, text,
-    text_input, text_input::Style as TextInputStyle,
+    button, checkbox, container, container::Style as ContainerStyle, opaque, row, scrollable,
+    stack, text, text_input, text_input::Style as TextInputStyle,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
@@ -578,6 +578,10 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 ]
                 .spacing(8),
                 text("Shortcuts").size(14),
+                checkbox(app.show_native_title_bar)
+                    .label("Show native title bar")
+                    .on_toggle(Message::SetShowNativeTitleBar)
+                    .text_size(13),
                 text("Cmd/Ctrl+1: Toggle sidebar").size(12),
                 text("Cmd/Ctrl+T: New terminal in active worktree").size(12),
                 text("Cmd/Ctrl+Shift+T: New detached terminal").size(12),
