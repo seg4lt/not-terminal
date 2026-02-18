@@ -52,6 +52,10 @@ impl PaneRuntime {
     pub(crate) fn update_modifiers(&mut self, modifiers: keyboard::Modifiers) {
         self.ghostty.update_modifiers(modifiers);
     }
+
+    pub(crate) fn ghostty_modifiers(&self) -> keyboard::Modifiers {
+        self.ghostty.modifiers()
+    }
 }
 
 impl Drop for PaneRuntime {
@@ -89,6 +93,11 @@ impl RuntimeSession {
 
     pub(crate) fn panes_mut(&mut self) -> impl Iterator<Item = &mut PaneRuntime> {
         self.panes.values_mut()
+    }
+
+    pub(crate) fn active_ghostty_modifiers(&self) -> Option<keyboard::Modifiers> {
+        self.panes.get(&self.active_pane_id)
+            .map(|pane| pane.ghostty_modifiers())
     }
 
     pub(crate) fn tick_all(&mut self) -> bool {

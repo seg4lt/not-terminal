@@ -152,6 +152,8 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                     ghostty.force_tick();
                     should_refresh_branch = true;
                 }
+                // Sync modifier state from active pane to all other panes
+                app.sync_modifiers_from_active_pane();
                 if app.process_runtime_actions() {
                     app.sync_runtime_views();
                 }
@@ -173,6 +175,8 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 ghostty.force_tick();
                 should_refresh_branch = true;
             }
+            // Sync modifier state from active pane to all other panes
+            app.sync_modifiers_from_active_pane();
             if app.process_runtime_actions() {
                 app.sync_runtime_views();
             }
