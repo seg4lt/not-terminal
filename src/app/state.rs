@@ -136,9 +136,10 @@ impl App {
             return None;
         }
 
-        let scale = self.window_scale_factor.max(0.1) as f64;
-        let local_x = ((position.x - x) as f64 * scale).max(0.0);
-        let local_y = ((position.y - y) as f64 * scale).max(0.0);
+        // Ghostty embedded runtime converts host coordinates to pixels internally
+        // using the content scale, so we must provide unscaled logical coordinates.
+        let local_x = (position.x - x) as f64;
+        let local_y = (position.y - y) as f64;
 
         Some((local_x, local_y))
     }
@@ -200,17 +201,18 @@ impl App {
             return;
         }
 
-        let (x_px, y_px, width_px, height_px) = self.terminal_frame_px();
+        let (x_logical, y_logical, width_logical, height_logical) = self.terminal_frame_logical();
+        let (_, _, width_px, height_px) = self.terminal_frame_px();
         let scale = self.window_scale_factor.max(0.1) as f64;
 
         for (index, session) in self.sessions.iter_mut().enumerate() {
             let active = index == self.active_session;
             host_view_set_frame(
                 session.host_view,
-                x_px as f64,
-                y_px as f64,
-                width_px as f64,
-                height_px as f64,
+                x_logical as f64,
+                y_logical as f64,
+                width_logical as f64,
+                height_logical as f64,
             );
             host_view_set_hidden(session.host_view, !active);
 
