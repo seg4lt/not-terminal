@@ -55,6 +55,7 @@ mod macos {
         fn ghostty_surface_set_size(surface: *mut c_void, width: u32, height: u32);
         fn ghostty_surface_set_content_scale(surface: *mut c_void, x: f64, y: f64);
         fn ghostty_surface_set_focus(surface: *mut c_void, focused: bool);
+        fn ghostty_surface_refresh(surface: *mut c_void);
         fn ghostty_surface_key(surface: *mut c_void, event: GhosttyInputKey) -> bool;
 
         fn rust_ghostty_runtime_bundle_new() -> *mut RuntimeBundle;
@@ -187,6 +188,12 @@ mod macos {
             unsafe {
                 ghostty_surface_set_focus(self.surface, focused);
                 ghostty_app_set_focus(self.app, focused);
+            }
+        }
+
+        pub fn refresh(&mut self) {
+            unsafe {
+                ghostty_surface_refresh(self.surface);
             }
         }
 
@@ -589,6 +596,8 @@ impl GhosttyEmbed {
     pub fn handle_keyboard_event(&mut self, _event: &iced::keyboard::Event) -> bool {
         false
     }
+
+    pub fn refresh(&mut self) {}
 }
 
 #[cfg(not(target_os = "macos"))]

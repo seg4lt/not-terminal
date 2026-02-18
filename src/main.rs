@@ -28,7 +28,7 @@ enum Message {
     HostViewResolved(Option<usize>),
     WindowSizeResolved(iced::Size),
     WindowScaleResolved(f32),
-    WindowResized(window::Id, iced::Size),
+    WindowEvent(window::Id, window::Event),
     GhosttyTick,
     Keyboard(iced::keyboard::Event),
     RetryGhosttyInit,
@@ -77,10 +77,8 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let mut subscriptions = vec![
-            self.terminal.subscription().map(Message::Terminal),
-            window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
-        ];
+        let mut subscriptions = vec![self.terminal.subscription().map(Message::Terminal)];
+        subscriptions.push(window::events().map(|(id, event)| Message::WindowEvent(id, event)));
 
         if self.ghostty.is_some() {
             subscriptions.push(window::frames().map(|_| Message::GhosttyTick));
@@ -183,6 +181,8 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             let (width_px, height_px) = app.window_size_px();
             if let Some(ghostty) = app.ghostty.as_mut() {
                 ghostty.set_size(width_px, height_px);
+                ghostty.refresh();
+                ghostty.force_tick();
             } else {
                 app.try_init_ghostty();
             }
@@ -194,23 +194,47 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             if let Some(ghostty) = app.ghostty.as_mut() {
                 ghostty.set_scale_factor(scale.max(0.1) as f64);
                 ghostty.set_size(width_px, height_px);
+                ghostty.refresh();
+                ghostty.force_tick();
             } else {
                 app.try_init_ghostty();
             }
             Task::none()
         }
-        Message::WindowResized(window_id, size) => {
-            if app.window_id == Some(window_id) {
-                app.window_size = size;
-                let (width_px, height_px) = app.window_size_px();
-                if let Some(ghostty) = app.ghostty.as_mut() {
-                    ghostty.set_size(width_px, height_px);
+        Message::WindowEvent(window_id, event) => {
+            if app.window_id.is_none_or(|current| current == window_id) {
+                match event {
+                    window::Event::Resized(size) => {
+                        app.window_size = size;
+                        let (width_px, height_px) = app.window_size_px();
+                        if let Some(ghostty) = app.ghostty.as_mut() {
+                            ghostty.set_size(width_px, height_px);
+                            ghostty.refresh();
+                            ghostty.force_tick();
+                        }
+                    }
+                    window::Event::Rescaled(scale) => {
+                        app.window_scale_factor = scale;
+                        let (width_px, height_px) = app.window_size_px();
+                        if let Some(ghostty) = app.ghostty.as_mut() {
+                            ghostty.set_scale_factor(scale.max(0.1) as f64);
+                            ghostty.set_size(width_px, height_px);
+                            ghostty.refresh();
+                            ghostty.force_tick();
+                        }
+                    }
+                    _ => {}
                 }
             }
             Task::none()
         }
         Message::GhosttyTick => {
+            let (width_px, height_px) = app.window_size_px();
             if let Some(ghostty) = app.ghostty.as_mut() {
+                if width_px > 0 && height_px > 0 {
+                    ghostty.set_size(width_px, height_px);
+                    ghostty.refresh();
+                }
                 ghostty.tick_if_needed();
             }
             Task::none()
@@ -218,6 +242,7 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::Keyboard(event) => {
             if let Some(ghostty) = app.ghostty.as_mut() {
                 if ghostty.handle_keyboard_event(&event) {
+                    ghostty.refresh();
                     ghostty.force_tick();
                 }
             }
@@ -233,6 +258,13 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
 }
 
 fn view(app: &App) -> iced::Element<'_, Message> {
+    if app.ghostty.is_some() {
+        return container(text(""))
+            .height(Length::Fill)
+            .width(Length::Fill)
+            .into();
+    }
+
     let header = row![
         text("Hello, world!"),
         button("-").on_press(Message::Decrement),
@@ -249,19 +281,9 @@ fn view(app: &App) -> iced::Element<'_, Message> {
     .spacing(10)
     .align_y(Alignment::Center);
 
-    let content = if app.ghostty.is_some() {
-        container(
-            text(
-                "Ghostty embed spike active. The terminal surface is attached to the native AppKit view.",
-            ),
-        )
+    let content = container(TerminalView::show(&app.terminal).map(Message::Terminal))
         .height(Length::Fill)
-        .width(Length::Fill)
-    } else {
-        container(TerminalView::show(&app.terminal).map(Message::Terminal))
-            .height(Length::Fill)
-            .width(Length::Fill)
-    };
+        .width(Length::Fill);
 
     container(
         column![header, status_bar, content]
