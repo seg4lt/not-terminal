@@ -152,7 +152,7 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                 button(text("+").size(12))
                     .padding([0, 6])
                     .style(|_, status| action_button_style(status))
-                    .on_press(Message::AddDetachedTerminal),
+                    .on_press(Message::AddProject),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
