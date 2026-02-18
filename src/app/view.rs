@@ -24,15 +24,23 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
             .into()
     };
 
-    let base: Element<'_, Message> = container(
-        iced::widget::column![top_bar_view(app), content]
+    let base: Element<'_, Message> = if app.sidebar_collapsed {
+        container(content)
             .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .style(|_| root_style())
-    .into();
+            .height(Length::Fill)
+            .style(|_| root_style())
+            .into()
+    } else {
+        container(
+            iced::widget::column![top_bar_view(app), content]
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_| root_style())
+        .into()
+    };
 
     if let Some(overlay) = modal_overlay(app) {
         stack([base, opaque(overlay)]).into()
@@ -78,17 +86,16 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
         );
     }
 
-    let (context_label, branch_label) = if let Some(context) = app.active_terminal_context() {
+    let context_label = if let Some(context) = app.active_terminal_context() {
         let breadcrumb = format!(
             "{} / {} / {}",
             truncate_label(&context.project_name),
             truncate_label(&context.worktree_name),
             truncate_label(&context.terminal_name)
         );
-        let branch = app.active_branch().unwrap_or_else(|| String::from("..."));
-        (breadcrumb, branch)
+        breadcrumb
     } else {
-        (String::from("No active terminal"), String::from("..."))
+        String::from("No active terminal")
     };
 
     bar = bar.push(
@@ -98,9 +105,6 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
                     .size(15)
                     .color(rgb(230, 232, 236))
                     .width(Length::Fill),
-                container(text(branch_label).size(12).color(rgb(198, 220, 198)))
-                    .padding([0, 6])
-                    .style(|_| branch_chip_style()),
             ]
             .spacing(6)
             .align_y(Alignment::Center),
@@ -121,6 +125,81 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
 fn sidebar_view(app: &App) -> Element<'_, Message> {
     let project_indices = app.filtered_project_indices();
     let mut list = iced::widget::column![].spacing(6).width(Length::Fill);
+    let active_terminal_id = app.active_terminal_id();
+
+    let mut detached_column = iced::widget::column![
+        container(
+            row![
+                monogram_chip("Detached"),
+                text("Detached")
+                    .size(14)
+                    .color(rgb(226, 229, 235))
+                    .width(Length::Fill),
+                text(format!("{}", app.persisted.detached_terminals.len()))
+                    .size(12)
+                    .color(rgb(150, 156, 167)),
+                button(text("+").size(11))
+                    .padding([0, 5])
+                    .style(|_, status| row_action_style(status))
+                    .on_press(Message::AddDetachedTerminal),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .padding([5, 5])
+        .style(move |_| {
+            project_row_style(app.persisted.selected_detached_terminal_id.is_some())
+        })
+    ]
+    .spacing(2);
+
+    if app.persisted.detached_terminals.is_empty() {
+        detached_column = detached_column.push(
+            container(text("No detached terminals").size(12).color(rgb(132, 138, 149)))
+                .padding([6, 8]),
+        );
+    } else {
+        for terminal in &app.persisted.detached_terminals {
+            let terminal_id = terminal.id.clone();
+            let terminal_id_for_action = terminal_id.clone();
+            let terminal_active = active_terminal_id
+                .as_ref()
+                .is_some_and(|active| active == &terminal_id);
+            let terminal_status = if terminal_active { "active" } else { "idle" };
+
+            detached_column = detached_column.push(
+                container(
+                    row![
+                        text("●").size(11).color(if terminal_active {
+                            rgb(94, 193, 112)
+                        } else {
+                            rgb(126, 131, 140)
+                        }),
+                        button(text(truncate_label(&terminal.name)).size(14))
+                            .padding([1, 2])
+                            .style(move |_, status| tree_main_button_style(status, terminal_active))
+                            .width(Length::Fill)
+                            .on_press(Message::SelectDetachedTerminal(terminal_id.clone())),
+                        text(terminal_status).size(12).color(if terminal_active {
+                            rgb(94, 193, 112)
+                        } else {
+                            rgb(128, 133, 142)
+                        }),
+                        button(text("x").size(11))
+                            .padding([0, 5])
+                            .style(|_, status| row_action_style(status))
+                            .on_press(Message::RemoveDetachedTerminal(terminal_id_for_action)),
+                    ]
+                    .spacing(5)
+                    .align_y(Alignment::Center),
+                )
+                .padding([2, 4])
+                .style(move |_| terminal_row_style(terminal_active)),
+            );
+        }
+    }
+
+    list = list.push(container(detached_column).style(|_| project_group_style()));
 
     if project_indices.is_empty() {
         list = list.push(
@@ -401,6 +480,7 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
             super::state::RenameTarget::Project { .. } => "Rename Project",
             super::state::RenameTarget::Worktree { .. } => "Rename Worktree",
             super::state::RenameTarget::Terminal { .. } => "Rename Terminal",
+            super::state::RenameTarget::DetachedTerminal { .. } => "Rename Terminal",
         };
 
         let panel = container(
@@ -499,6 +579,8 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 .spacing(8),
                 text("Shortcuts").size(14),
                 text("Cmd/Ctrl+1: Toggle sidebar").size(12),
+                text("Cmd/Ctrl+T: New terminal in active worktree").size(12),
+                text("Cmd/Ctrl+Shift+T: New detached terminal").size(12),
                 text("Cmd/Ctrl+P: Quick open").size(12),
                 text("Cmd/Ctrl+, : Preferences").size(12),
                 text("Cmd/Ctrl+=/-/0: Font size").size(12),
@@ -600,18 +682,6 @@ fn top_bar_sidebar_style() -> ContainerStyle {
 fn top_bar_context_style() -> ContainerStyle {
     ContainerStyle {
         background: Some(Background::Color(rgb(12, 14, 20))),
-        ..Default::default()
-    }
-}
-
-fn branch_chip_style() -> ContainerStyle {
-    ContainerStyle {
-        background: Some(Background::Color(rgb(24, 35, 30))),
-        border: Border {
-            width: 1.0,
-            color: rgb(56, 86, 62),
-            radius: 2.0.into(),
-        },
         ..Default::default()
     }
 }

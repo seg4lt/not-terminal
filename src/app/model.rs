@@ -11,6 +11,8 @@ pub(crate) struct PersistedState {
     pub(crate) version: u32,
     pub(crate) active_project_id: Option<String>,
     pub(crate) projects: Vec<ProjectRecord>,
+    pub(crate) detached_terminals: Vec<TerminalRecord>,
+    pub(crate) selected_detached_terminal_id: Option<String>,
     pub(crate) ui: UiState,
 }
 
@@ -20,6 +22,8 @@ impl Default for PersistedState {
             version: 1,
             active_project_id: None,
             projects: Vec::new(),
+            detached_terminals: Vec::new(),
+            selected_detached_terminal_id: None,
             ui: UiState::default(),
         }
     }

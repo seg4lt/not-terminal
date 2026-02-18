@@ -138,7 +138,8 @@ void *rust_ghostty_surface_new_macos(void *surface_new_fn_raw,
                                      void *app,
                                      void *ns_view,
                                      double scale_factor,
-                                     float font_size_points) {
+                                     float font_size_points,
+                                     const char *working_directory) {
   if (surface_new_fn_raw == NULL || app == NULL || ns_view == NULL) {
     return NULL;
   }
@@ -151,6 +152,7 @@ void *rust_ghostty_surface_new_macos(void *surface_new_fn_raw,
   config.platform.macos.nsview = ns_view;
   config.scale_factor = scale_factor;
   config.font_size = font_size_points;
+  config.working_directory = working_directory;
   config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW;
 
   return surface_new_fn(app, &config);

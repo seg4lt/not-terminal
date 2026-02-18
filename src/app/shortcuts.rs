@@ -4,6 +4,8 @@ use iced::keyboard::key::{Code, Key, Named, Physical};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShortcutAction {
     ToggleSidebar,
+    NewTerminal,
+    NewDetachedTerminal,
     OpenQuickOpen,
     OpenPreferences,
     RenameTerminal,
@@ -15,6 +17,8 @@ pub(crate) enum ShortcutAction {
     PreviousTerminal,
     ModalCancel,
     ModalSubmit,
+    ModalFocusNext,
+    ModalFocusPrevious,
 }
 
 pub(crate) fn detect_shortcut(
@@ -37,6 +41,17 @@ pub(crate) fn detect_shortcut(
     }
     if matches!(key.as_ref(), Key::Named(Named::Enter)) && modal_open {
         return Some(ShortcutAction::ModalSubmit);
+    }
+    if matches!(key.as_ref(), Key::Named(Named::Tab))
+        && modal_open
+        && !modifiers.logo()
+        && !modifiers.control()
+        && !modifiers.alt()
+    {
+        if modifiers.shift() {
+            return Some(ShortcutAction::ModalFocusPrevious);
+        }
+        return Some(ShortcutAction::ModalFocusNext);
     }
 
     if matches!(key.as_ref(), Key::Named(Named::F2))
@@ -65,6 +80,10 @@ pub(crate) fn detect_shortcut(
     }
 
     if modifiers.shift() && !modifiers.alt() {
+        if is_key_t(key_char.as_deref(), physical_key) {
+            return Some(ShortcutAction::NewDetachedTerminal);
+        }
+
         if is_bracket_right(key_char.as_deref(), physical_key) {
             return Some(ShortcutAction::NextTerminal);
         }
@@ -80,6 +99,10 @@ pub(crate) fn detect_shortcut(
 
     if is_digit_one(key_char.as_deref(), physical_key) && !modifiers.shift() {
         return Some(ShortcutAction::ToggleSidebar);
+    }
+
+    if is_key_t(key_char.as_deref(), physical_key) && !modifiers.shift() {
+        return Some(ShortcutAction::NewTerminal);
     }
 
     if is_key_p(key_char.as_deref(), physical_key) && !modifiers.shift() {
@@ -122,6 +145,10 @@ fn is_letter(value: Option<&str>, target: &str) -> bool {
 
 fn is_key_p(value: Option<&str>, physical: &Physical) -> bool {
     is_letter(value, "p") || matches!(physical, Physical::Code(Code::KeyP))
+}
+
+fn is_key_t(value: Option<&str>, physical: &Physical) -> bool {
+    is_letter(value, "t") || matches!(physical, Physical::Code(Code::KeyT))
 }
 
 fn is_key_r(value: Option<&str>, physical: &Physical) -> bool {

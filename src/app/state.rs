@@ -34,6 +34,9 @@ pub(crate) enum RenameTarget {
         worktree_id: String,
         terminal_id: String,
     },
+    DetachedTerminal {
+        terminal_id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +54,6 @@ pub(crate) struct AddWorktreeDialog {
 
 #[derive(Debug, Clone)]
 pub(crate) struct QuickOpenEntry {
-    pub(crate) project_id: String,
     pub(crate) project_name: String,
     pub(crate) worktree_name: String,
     pub(crate) terminal_id: String,
@@ -71,7 +73,7 @@ pub(crate) struct ActiveTerminalContext {
     pub(crate) worktree_name: String,
     pub(crate) terminal_name: String,
     pub(crate) terminal_id: String,
-    pub(crate) worktree_path: String,
+    pub(crate) worktree_path: Option<String>,
 }
 
 pub(crate) struct App {
@@ -124,15 +126,18 @@ pub(crate) enum Message {
         project_id: String,
         worktree_id: String,
     },
+    AddDetachedTerminal,
     SelectTerminal {
         project_id: String,
         terminal_id: String,
     },
+    SelectDetachedTerminal(String),
     RemoveTerminal {
         project_id: String,
         worktree_id: String,
         terminal_id: String,
     },
+    RemoveDetachedTerminal(String),
     OpenPreferences(bool),
     OpenQuickOpen(bool),
     QuickOpenQueryChanged(String),
@@ -151,6 +156,7 @@ pub(crate) enum Message {
     StartAddWorktree(String),
     AddWorktreeBranchChanged(String),
     AddWorktreePathChanged(String),
+    FocusAddWorktreePath,
     AddWorktreeCommit,
     AddWorktreeCancel,
     RemoveWorktree {
@@ -278,6 +284,10 @@ impl App {
     }
 
     pub(crate) fn header_height_logical(&self) -> f32 {
+        if self.sidebar_collapsed {
+            return 0.0;
+        }
+
         HEADER_HEIGHT
             .max(0.0)
             .min(self.window_size.height.max(1.0) - 1.0)
@@ -314,6 +324,21 @@ impl App {
     }
 
     pub(crate) fn normalize_selection(&mut self) {
+        if self
+            .persisted
+            .selected_detached_terminal_id
+            .as_ref()
+            .is_some_and(|selected| {
+                !self
+                    .persisted
+                    .detached_terminals
+                    .iter()
+                    .any(|terminal| &terminal.id == selected)
+            })
+        {
+            self.persisted.selected_detached_terminal_id = None;
+        }
+
         if self.persisted.projects.is_empty() {
             self.persisted.active_project_id = None;
             return;
@@ -369,7 +394,38 @@ impl App {
             .and_then(|index| self.persisted.projects.get(index))
     }
 
+    pub(crate) fn active_worktree_ids(&self) -> Option<(String, String)> {
+        if let Some(terminal_id) = self.active_terminal_id()
+            && let Some(locator) = self.find_terminal_locator(&terminal_id)
+        {
+            let project_id = self.persisted.projects.get(locator.project_idx)?.id.clone();
+            let worktree_id = self
+                .persisted
+                .projects
+                .get(locator.project_idx)?
+                .worktrees
+                .get(locator.worktree_idx)?
+                .id
+                .clone();
+            return Some((project_id, worktree_id));
+        }
+
+        let project = self.active_project()?;
+        let worktree = project.worktrees.first()?;
+        Some((project.id.clone(), worktree.id.clone()))
+    }
+
     pub(crate) fn active_terminal_id(&self) -> Option<String> {
+        if let Some(selected_detached) = &self.persisted.selected_detached_terminal_id
+            && self
+                .persisted
+                .detached_terminals
+                .iter()
+                .any(|terminal| &terminal.id == selected_detached)
+        {
+            return Some(selected_detached.clone());
+        }
+
         let project = self.active_project()?;
         if let Some(selected) = &project.selected_terminal_id
             && project_terminal_exists(project, selected)
@@ -387,6 +443,21 @@ impl App {
 
     pub(crate) fn active_terminal_context(&self) -> Option<ActiveTerminalContext> {
         let active_terminal_id = self.active_terminal_id()?;
+        if let Some(detached_terminal) = self
+            .persisted
+            .detached_terminals
+            .iter()
+            .find(|terminal| terminal.id == active_terminal_id)
+        {
+            return Some(ActiveTerminalContext {
+                project_name: String::from("Detached"),
+                worktree_name: String::from("-"),
+                terminal_name: detached_terminal.name.clone(),
+                terminal_id: detached_terminal.id.clone(),
+                worktree_path: None,
+            });
+        }
+
         let locator = self.find_terminal_locator(&active_terminal_id)?;
 
         let project = self.persisted.projects.get(locator.project_idx)?;
@@ -398,13 +469,8 @@ impl App {
             worktree_name: worktree.name.clone(),
             terminal_name: terminal.name.clone(),
             terminal_id: terminal.id.clone(),
-            worktree_path: worktree.path.clone(),
+            worktree_path: Some(worktree.path.clone()),
         })
-    }
-
-    pub(crate) fn active_branch(&self) -> Option<String> {
-        let terminal_id = self.active_terminal_id()?;
-        self.branch_by_terminal.get(&terminal_id).cloned()
     }
 
     pub(crate) fn refresh_active_branch_task(&mut self) -> Task<Message> {
@@ -426,7 +492,10 @@ impl App {
         }
 
         let terminal_id = context.terminal_id.clone();
-        let worktree_path = context.worktree_path.clone();
+        let Some(worktree_path) = context.worktree_path.clone() else {
+            self.branch_by_terminal.remove(&context.terminal_id);
+            return Task::none();
+        };
 
         self.last_branch_refresh_terminal_id = Some(terminal_id.clone());
         self.last_branch_refresh_at = Some(now);
@@ -467,6 +536,9 @@ impl App {
                 }
             }
         }
+        for terminal in &self.persisted.detached_terminals {
+            result.push(terminal.id.clone());
+        }
         result
     }
 
@@ -488,7 +560,6 @@ impl App {
                     }
 
                     entries.push(QuickOpenEntry {
-                        project_id: project.id.clone(),
                         project_name: project.name.clone(),
                         worktree_name: worktree.name.clone(),
                         terminal_id: terminal.id.clone(),
@@ -496,6 +567,20 @@ impl App {
                     });
                 }
             }
+        }
+
+        for terminal in &self.persisted.detached_terminals {
+            let text = format!("detached global {}", terminal.name.to_lowercase());
+            if !query.is_empty() && !text.contains(&query) {
+                continue;
+            }
+
+            entries.push(QuickOpenEntry {
+                project_name: String::from("Detached"),
+                worktree_name: String::from("-"),
+                terminal_id: terminal.id.clone(),
+                terminal_name: terminal.name.clone(),
+            });
         }
 
         entries
@@ -562,12 +647,25 @@ impl App {
 
         let (_, _, width_px, height_px) = self.terminal_frame_px();
         let scale = self.window_scale_factor.max(0.1) as f64;
+        let working_directory = self.find_terminal_locator(terminal_id).and_then(|locator| {
+            self.persisted
+                .projects
+                .get(locator.project_idx)
+                .and_then(|project| project.worktrees.get(locator.worktree_idx))
+                .map(|worktree| worktree.path.clone())
+        });
 
         let Some(host_view) = host_view_new(parent_ns_view) else {
             return Err(String::from("failed to create terminal host view"));
         };
 
-        let ghostty = match GhosttyEmbed::new(host_view, width_px, height_px, scale) {
+        let ghostty = match GhosttyEmbed::new(
+            host_view,
+            width_px,
+            height_px,
+            scale,
+            working_directory.as_deref(),
+        ) {
             Ok(value) => value,
             Err(error) => {
                 return Err(format!("failed to initialize terminal runtime: {error}"));
@@ -651,11 +749,13 @@ impl App {
         }
 
         self.persisted.active_project_id = Some(project_id.to_string());
+        self.persisted.selected_detached_terminal_id = None;
         self.normalize_selection();
     }
 
     pub(crate) fn select_terminal(&mut self, project_id: &str, terminal_id: &str) {
         self.persisted.active_project_id = Some(project_id.to_string());
+        self.persisted.selected_detached_terminal_id = None;
 
         if let Some(project) = self
             .persisted
@@ -689,11 +789,8 @@ impl App {
         }
         let next_index = (next_index % len) as usize;
 
-        if let Some(next_terminal_id) = sequence.get(next_index)
-            && let Some(locator) = self.find_terminal_locator(next_terminal_id)
-        {
-            let project_id = self.persisted.projects[locator.project_idx].id.clone();
-            self.select_terminal(&project_id, next_terminal_id);
+        if let Some(next_terminal_id) = sequence.get(next_index) {
+            self.select_terminal_by_id(next_terminal_id);
         }
     }
 
@@ -875,6 +972,20 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn suggested_worktree_destination(
+        &self,
+        project_id: &str,
+        branch_name: &str,
+    ) -> Option<String> {
+        let project = self
+            .persisted
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)?;
+        let git_folder = project.git_folder_path.as_ref()?;
+        Some(suggest_worktree_destination(git_folder, branch_name))
+    }
+
     pub(crate) fn remove_worktree(
         &mut self,
         project_id: &str,
@@ -961,6 +1072,31 @@ impl App {
         created
     }
 
+    pub(crate) fn add_detached_terminal(&mut self) -> String {
+        let terminal_id = create_id("terminal");
+        let terminal_name = next_terminal_name(&self.persisted.detached_terminals);
+        self.persisted.detached_terminals.push(TerminalRecord {
+            id: terminal_id.clone(),
+            name: terminal_name,
+            manual_name: false,
+        });
+        self.persisted.selected_detached_terminal_id = Some(terminal_id.clone());
+        self.normalize_selection();
+        terminal_id
+    }
+
+    pub(crate) fn select_detached_terminal(&mut self, terminal_id: &str) {
+        if self
+            .persisted
+            .detached_terminals
+            .iter()
+            .any(|terminal| terminal.id == terminal_id)
+        {
+            self.persisted.selected_detached_terminal_id = Some(terminal_id.to_string());
+        }
+        self.normalize_selection();
+    }
+
     pub(crate) fn remove_terminal(
         &mut self,
         project_id: &str,
@@ -1000,29 +1136,31 @@ impl App {
         self.normalize_selection();
     }
 
-    pub(crate) fn start_rename_focused(&mut self) {
-        if let Some(active_terminal_id) = self.active_terminal_id()
-            && let Some(locator) = self.find_terminal_locator(&active_terminal_id)
-        {
-            let project_id = self.persisted.projects[locator.project_idx].id.clone();
-            let worktree_id = self.persisted.projects[locator.project_idx].worktrees
-                [locator.worktree_idx]
-                .id
-                .clone();
-            let terminal_name = self.persisted.projects[locator.project_idx].worktrees
-                [locator.worktree_idx]
-                .terminals[locator.terminal_idx]
-                .name
-                .clone();
+    pub(crate) fn remove_detached_terminal(&mut self, terminal_id: &str) {
+        self.persisted
+            .detached_terminals
+            .retain(|terminal| terminal.id != terminal_id);
 
-            self.rename_dialog = Some(RenameDialog {
-                target: RenameTarget::Terminal {
-                    project_id,
-                    worktree_id,
-                    terminal_id: active_terminal_id,
-                },
-                value: terminal_name,
-            });
+        if self
+            .persisted
+            .selected_detached_terminal_id
+            .as_ref()
+            .is_some_and(|selected| selected == terminal_id)
+        {
+            self.persisted.selected_detached_terminal_id = self
+                .persisted
+                .detached_terminals
+                .first()
+                .map(|terminal| terminal.id.clone());
+        }
+
+        self.remove_runtime(terminal_id);
+        self.normalize_selection();
+    }
+
+    pub(crate) fn start_rename_focused(&mut self) {
+        self.start_rename_active_terminal();
+        if self.rename_dialog.is_some() {
             return;
         }
 
@@ -1078,9 +1216,11 @@ impl App {
     }
 
     pub(crate) fn start_rename_active_terminal(&mut self) {
-        if let Some(active_terminal_id) = self.active_terminal_id()
-            && let Some(locator) = self.find_terminal_locator(&active_terminal_id)
-        {
+        let Some(active_terminal_id) = self.active_terminal_id() else {
+            return;
+        };
+
+        if let Some(locator) = self.find_terminal_locator(&active_terminal_id) {
             let project_id = self.persisted.projects[locator.project_idx].id.clone();
             let worktree_id = self.persisted.projects[locator.project_idx].worktrees
                 [locator.worktree_idx]
@@ -1099,6 +1239,21 @@ impl App {
                     terminal_id: active_terminal_id,
                 },
                 value: terminal_name,
+            });
+            return;
+        }
+
+        if let Some(terminal) = self
+            .persisted
+            .detached_terminals
+            .iter()
+            .find(|terminal| terminal.id == active_terminal_id)
+        {
+            self.rename_dialog = Some(RenameDialog {
+                target: RenameTarget::DetachedTerminal {
+                    terminal_id: terminal.id.clone(),
+                },
+                value: terminal.name.clone(),
             });
         }
     }
@@ -1165,6 +1320,17 @@ impl App {
                     terminal.manual_name = true;
                 }
             }
+            RenameTarget::DetachedTerminal { terminal_id } => {
+                if let Some(terminal) = self
+                    .persisted
+                    .detached_terminals
+                    .iter_mut()
+                    .find(|terminal| terminal.id == terminal_id)
+                {
+                    terminal.name = value.to_string();
+                    terminal.manual_name = true;
+                }
+            }
         }
 
         self.rename_dialog = None;
@@ -1172,12 +1338,22 @@ impl App {
     }
 
     pub(crate) fn select_terminal_by_id(&mut self, terminal_id: &str) {
-        let Some(locator) = self.find_terminal_locator(terminal_id) else {
+        if let Some(locator) = self.find_terminal_locator(terminal_id) {
+            let project_id = self.persisted.projects[locator.project_idx].id.clone();
+            self.select_terminal(&project_id, terminal_id);
             return;
-        };
+        }
 
-        let project_id = self.persisted.projects[locator.project_idx].id.clone();
-        self.select_terminal(&project_id, terminal_id);
+        self.select_detached_terminal(terminal_id);
+    }
+
+    pub(crate) fn terminal_exists(&self, terminal_id: &str) -> bool {
+        self.find_terminal_locator(terminal_id).is_some()
+            || self
+                .persisted
+                .detached_terminals
+                .iter()
+                .any(|terminal| terminal.id == terminal_id)
     }
 }
 

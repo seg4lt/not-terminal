@@ -265,11 +265,29 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 Task::none()
             }
         }
+        Message::AddDetachedTerminal => {
+            let terminal_id = app.add_detached_terminal();
+            if let Err(error) = app.ensure_runtime_for_terminal(&terminal_id) {
+                app.status = error;
+            }
+            app.select_detached_terminal(&terminal_id);
+            app.sync_runtime_views();
+            app.status = String::from("Detached terminal added");
+            app.save_task()
+        }
         Message::SelectTerminal {
             project_id,
             terminal_id,
         } => {
             app.select_terminal(&project_id, &terminal_id);
+            if let Err(error) = app.ensure_runtime_for_terminal(&terminal_id) {
+                app.status = error;
+            }
+            app.sync_runtime_views();
+            app.save_task()
+        }
+        Message::SelectDetachedTerminal(terminal_id) => {
+            app.select_detached_terminal(&terminal_id);
             if let Err(error) = app.ensure_runtime_for_terminal(&terminal_id) {
                 app.status = error;
             }
@@ -282,6 +300,12 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             terminal_id,
         } => {
             app.remove_terminal(&project_id, &worktree_id, &terminal_id);
+            app.ensure_active_runtime();
+            app.sync_runtime_views();
+            app.save_task()
+        }
+        Message::RemoveDetachedTerminal(terminal_id) => {
+            app.remove_detached_terminal(&terminal_id);
             app.ensure_active_runtime();
             app.sync_runtime_views();
             app.save_task()
@@ -320,7 +344,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::QuickOpenSubmit => {
             if let Some(entry) = app.quick_open_entries().first().cloned() {
-                app.select_terminal(&entry.project_id, &entry.terminal_id);
+                app.select_terminal_by_id(&entry.terminal_id);
                 if let Err(error) = app.ensure_runtime_for_terminal(&entry.terminal_id) {
                     app.status = error;
                 }
@@ -440,8 +464,19 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
         }
         Message::AddWorktreeBranchChanged(value) => {
+            let project_id = app
+                .add_worktree_dialog
+                .as_ref()
+                .map(|dialog| dialog.project_id.clone());
+            let suggested = project_id
+                .as_deref()
+                .and_then(|project_id| app.suggested_worktree_destination(project_id, &value));
+
             if let Some(dialog) = app.add_worktree_dialog.as_mut() {
                 dialog.branch_name = value;
+                if let Some(path) = suggested {
+                    dialog.destination_path = path;
+                }
             }
             Task::none()
         }
@@ -451,6 +486,10 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::FocusAddWorktreePath => Task::batch([
+            operation::focus("add-worktree-path-input"),
+            operation::move_cursor_to_end("add-worktree-path-input"),
+        ]),
         Message::AddWorktreeCommit => match app.commit_add_worktree() {
             Ok(()) => {
                 app.status = String::from("Worktree added");
@@ -493,7 +532,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             terminal_id,
             branch,
         } => {
-            if app.find_terminal_locator(&terminal_id).is_none() {
+            if !app.terminal_exists(&terminal_id) {
                 return Task::none();
             }
 
@@ -510,6 +549,21 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
     match action {
         ShortcutAction::ToggleSidebar => update(app, Message::ToggleSidebar),
+        ShortcutAction::NewTerminal => {
+            if let Some((project_id, worktree_id)) = app.active_worktree_ids() {
+                update(
+                    app,
+                    Message::AddTerminal {
+                        project_id,
+                        worktree_id,
+                    },
+                )
+            } else {
+                app.status = String::from("No active worktree to create a terminal in");
+                Task::none()
+            }
+        }
+        ShortcutAction::NewDetachedTerminal => update(app, Message::AddDetachedTerminal),
         ShortcutAction::OpenQuickOpen => update(app, Message::OpenQuickOpen(true)),
         ShortcutAction::OpenPreferences => update(app, Message::OpenPreferences(true)),
         ShortcutAction::RenameTerminal => update(app, Message::StartRenameTerminal),
@@ -569,5 +623,7 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             }
             Task::none()
         }
+        ShortcutAction::ModalFocusNext => operation::focus_next(),
+        ShortcutAction::ModalFocusPrevious => operation::focus_previous(),
     }
 }

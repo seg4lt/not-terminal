@@ -100,6 +100,7 @@ mod macos {
             ns_view: *mut c_void,
             scale_factor: f64,
             font_size_points: f32,
+            working_directory: *const c_char,
         ) -> *mut c_void;
         fn rust_ghostty_host_view_new(parent_ns_view: *mut c_void) -> *mut c_void;
         fn rust_ghostty_host_view_set_frame(
@@ -127,6 +128,7 @@ mod macos {
             width_px: u32,
             height_px: u32,
             scale_factor: f64,
+            working_directory: Option<&str>,
         ) -> Result<Self, String> {
             if ns_view == 0 {
                 return Err(String::from("received null NSView pointer"));
@@ -137,6 +139,7 @@ mod macos {
             let mut config: *mut c_void = ptr::null_mut();
             let mut app: *mut c_void = ptr::null_mut();
             let mut surface: *mut c_void = ptr::null_mut();
+            let working_directory_cstr = to_c_string_optional(working_directory);
 
             let create_result = (|| -> Result<(), String> {
                 unsafe {
@@ -175,6 +178,9 @@ mod macos {
                         ns_view as *mut c_void,
                         scale_factor,
                         0.0,
+                        working_directory_cstr
+                            .as_ref()
+                            .map_or(ptr::null(), |value| value.as_ptr()),
                     );
                     if surface.is_null() {
                         return Err(String::from("ghostty_surface_new returned null"));
@@ -479,6 +485,10 @@ mod macos {
         } else {
             CString::new(value).ok()
         }
+    }
+
+    fn to_c_string_optional(value: Option<&str>) -> Option<CString> {
+        value.and_then(to_c_string)
     }
 
     fn load_default_theme(config: *mut c_void) {
@@ -819,6 +829,7 @@ impl GhosttyEmbed {
         _width_px: u32,
         _height_px: u32,
         _scale_factor: f64,
+        _working_directory: Option<&str>,
     ) -> Result<Self, String> {
         Err(String::from("Ghostty embedding spike is macOS-only"))
     }
