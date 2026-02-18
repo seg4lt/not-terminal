@@ -803,19 +803,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "elm-ghostty"
-version = "0.1.0"
-dependencies = [
- "cc",
- "dirs",
- "iced",
- "iced_term",
- "rfd",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "endi"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2044,6 +2031,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys",
+]
+
+[[package]]
+name = "not-terminal"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "dirs",
+ "iced",
+ "iced_term",
+ "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

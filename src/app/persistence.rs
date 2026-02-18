@@ -31,5 +31,5 @@ pub(crate) fn state_file_path() -> Result<PathBuf, String> {
         .or_else(dirs::home_dir)
         .unwrap_or(std::env::current_dir().map_err(|e| format!("failed to resolve cwd: {e}"))?);
 
-    Ok(base.join("elm-ghostty").join("state.json"))
+    Ok(base.join("not-terminal").join("state.json"))
 }
