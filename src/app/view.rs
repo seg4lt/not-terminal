@@ -105,6 +105,10 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
                     .size(15)
                     .color(rgb(230, 232, 236))
                     .width(Length::Fill),
+                button(text("+").size(13))
+                    .padding([0, 6])
+                    .style(|_, status| toolbar_button_style(status))
+                    .on_press(Message::AddProject),
             ]
             .spacing(6)
             .align_y(Alignment::Center),
