@@ -133,6 +133,8 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                         | ShortcutAction::NewDetachedTerminal
                         | ShortcutAction::CloseActiveTerminal
                         | ShortcutAction::OpenQuickOpen
+                        | ShortcutAction::NextTerminal
+                        | ShortcutAction::PreviousTerminal
                 )
             ) {
                 if let Some(action) = shortcut_action {
@@ -428,6 +430,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.quick_open_open = open;
             if open {
                 app.quick_open_query.clear();
+                app.quick_open_selected_index = 0;
                 app.preferences_open = false;
                 app.rename_dialog = None;
                 app.add_worktree_dialog = None;
@@ -444,6 +447,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::QuickOpenQueryChanged(value) => {
             app.quick_open_query = value;
+            app.quick_open_selected_index = 0;  // Reset selection when query changes
             Task::none()
         }
         Message::QuickOpenSubmit => {
@@ -454,6 +458,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 }
                 app.quick_open_open = false;
                 app.quick_open_query.clear();
+                app.quick_open_selected_index = 0;
                 app.sync_runtime_views();
                 return app.save_task();
             }
@@ -466,6 +471,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
             app.quick_open_open = false;
             app.quick_open_query.clear();
+            app.quick_open_selected_index = 0;
             app.sync_runtime_views();
             app.save_task()
         }
@@ -728,7 +734,34 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             }
             Task::none()
         }
-        ShortcutAction::ModalFocusNext => operation::focus_next(),
-        ShortcutAction::ModalFocusPrevious => operation::focus_previous(),
+        ShortcutAction::ModalFocusNext => {
+            app.suppress_next_key_release = true;
+            if app.quick_open_open {
+                let entries = app.quick_open_entries();
+                if !entries.is_empty() {
+                    app.quick_open_selected_index = (app.quick_open_selected_index + 1) % entries.len().min(24);
+                }
+                Task::none()
+            } else {
+                operation::focus_next()
+            }
+        }
+        ShortcutAction::ModalFocusPrevious => {
+            app.suppress_next_key_release = true;
+            if app.quick_open_open {
+                let entries = app.quick_open_entries();
+                if !entries.is_empty() {
+                    let count = entries.len().min(24);
+                    app.quick_open_selected_index = if app.quick_open_selected_index == 0 {
+                        count - 1
+                    } else {
+                        app.quick_open_selected_index - 1
+                    };
+                }
+                Task::none()
+            } else {
+                operation::focus_previous()
+            }
+        }
     }
 }

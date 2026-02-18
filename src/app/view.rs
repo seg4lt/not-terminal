@@ -467,7 +467,13 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
         .spacing(6)
         .width(Length::Fill);
 
-        for entry in entries.iter().take(24) {
+        for (idx, entry) in entries.iter().take(24).enumerate() {
+            let is_selected = idx == app.quick_open_selected_index;
+            let style = if is_selected {
+                selected_entry_style
+            } else {
+                tree_icon_button_style
+            };
             list = list.push(
                 button(
                     text(format!(
@@ -478,7 +484,7 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 )
                 .width(Length::Fill)
                 .padding([4, 6])
-                .style(|_, status| tree_icon_button_style(status))
+                .style(move |_, status| style(status))
                 .on_press(Message::QuickOpenSelect(entry.terminal_id.clone())),
             );
         }
@@ -950,6 +956,35 @@ fn tree_icon_button_style(status: button::Status) -> button::Style {
         }
         button::Status::Disabled => {
             style.text_color = rgb(110, 116, 128);
+        }
+        button::Status::Active => {}
+    }
+
+    style
+}
+
+fn selected_entry_style(status: button::Status) -> button::Style {
+    let mut style = button::Style {
+        background: Some(Background::Color(rgb(59, 130, 246))),
+        text_color: rgb(255, 255, 255),
+        border: Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    };
+
+    match status {
+        button::Status::Hovered => {
+            style.background = Some(Background::Color(rgb(80, 150, 250)));
+        }
+        button::Status::Pressed => {
+            style.background = Some(Background::Color(rgb(40, 110, 230)));
+        }
+        button::Status::Disabled => {
+            style.background = Some(Background::Color(rgb(60, 70, 80)));
+            style.text_color = rgb(150, 160, 170);
         }
         button::Status::Active => {}
     }

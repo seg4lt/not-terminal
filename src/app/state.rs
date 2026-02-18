@@ -93,6 +93,7 @@ pub(crate) struct App {
     pub(crate) preferences_open: bool,
     pub(crate) quick_open_open: bool,
     pub(crate) quick_open_query: String,
+    pub(crate) quick_open_selected_index: usize,
     pub(crate) rename_dialog: Option<RenameDialog>,
     pub(crate) add_worktree_dialog: Option<AddWorktreeDialog>,
     pub(crate) suppress_next_key_release: bool,
@@ -192,6 +193,7 @@ impl App {
             preferences_open: false,
             quick_open_open: false,
             quick_open_query: String::new(),
+            quick_open_selected_index: 0,
             rename_dialog: None,
             add_worktree_dialog: None,
             suppress_next_key_release: false,
@@ -575,6 +577,13 @@ impl App {
         let query = self.quick_open_query.trim().to_lowercase();
         let mut entries = Vec::new();
 
+        // Split query by spaces for fuzzy matching
+        let search_terms: Vec<&str> = if query.is_empty() {
+            Vec::new()
+        } else {
+            query.split_whitespace().collect()
+        };
+
         for project in &self.persisted.projects {
             for worktree in &project.worktrees {
                 for terminal in &worktree.terminals {
@@ -584,7 +593,9 @@ impl App {
                         worktree.name.to_lowercase(),
                         terminal.name.to_lowercase()
                     );
-                    if !query.is_empty() && !text.contains(&query) {
+
+                    // Fuzzy match: all search terms must be found in the text
+                    if !search_terms.is_empty() && !search_terms.iter().all(|term| text.contains(term)) {
                         continue;
                     }
 
@@ -600,7 +611,9 @@ impl App {
 
         for terminal in &self.persisted.detached_terminals {
             let text = format!("detached global {}", terminal.name.to_lowercase());
-            if !query.is_empty() && !text.contains(&query) {
+
+            // Fuzzy match: all search terms must be found in the text
+            if !search_terms.is_empty() && !search_terms.iter().all(|term| text.contains(term)) {
                 continue;
             }
 

@@ -55,6 +55,16 @@ pub(crate) fn detect_shortcut(
         return Some(ShortcutAction::ModalFocusNext);
     }
 
+    // Arrow keys for modal navigation
+    if modal_open {
+        if matches!(key.as_ref(), Key::Named(Named::ArrowDown)) && !modifiers.shift() {
+            return Some(ShortcutAction::ModalFocusNext);
+        }
+        if matches!(key.as_ref(), Key::Named(Named::ArrowUp)) && !modifiers.shift() {
+            return Some(ShortcutAction::ModalFocusPrevious);
+        }
+    }
+
     if matches!(key.as_ref(), Key::Named(Named::F2))
         && !modifiers.logo()
         && !modifiers.control()
