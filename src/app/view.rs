@@ -1,5 +1,6 @@
 use super::state::{App, Message};
 use iced::mouse::Interaction;
+use iced::widget::text::Wrapping;
 use iced::widget::{
     button, checkbox, container, container::Style as ContainerStyle, mouse_area, opaque, row,
     scrollable, stack, text, text_input, text_input::Style as TextInputStyle,
@@ -103,7 +104,8 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
                 text(context_label)
                     .size(15)
                     .color(rgb(230, 232, 236))
-                    .width(Length::Fill),
+                    .width(Length::Fill)
+                    .wrapping(Wrapping::None),
                 button(text("+").size(13))
                     .padding([0, 6])
                     .style(|_, status| toolbar_button_style(status))
@@ -142,22 +144,22 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                 .width(Length::Fill),
             container(
                 text(format!("{}", app.persisted.detached_terminals.len()))
-                    .size(11)
-                    .color(rgb(180, 185, 195))
+                    .size(10)
+                    .color(rgb(145, 150, 160))
             )
-            .padding([2, 6])
-            .style(|_| count_badge_style()),
+            .padding([3, 6])
+            .style(|_| subtle_badge_style()),
             button(text("+").size(12))
-                .padding([0, 6])
-                .style(|_, status| action_button_style(status))
-                .on_press(Message::AddProject),
+                .padding([0, 5])
+                .style(|_, status| subtle_action_button_style(status))
+                .on_press(Message::AddDetachedTerminal),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
     )
-    .padding([6, 8])
+    .padding([8, 10])
     .style(move |_| project_header_style(detached_active))]
-    .spacing(2);
+    .spacing(0);
 
     if app.persisted.detached_terminals.is_empty() {
         detached_column = detached_column.push(
@@ -166,7 +168,7 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                     .size(11)
                     .color(rgb(130, 135, 145)),
             )
-            .padding([8, 12]),
+            .padding([12, 16]),
         );
     } else {
         for terminal in &app.persisted.detached_terminals {
@@ -175,37 +177,45 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
             let terminal_active = active_terminal_id
                 .as_ref()
                 .is_some_and(|active| active == &terminal_id);
-            let terminal_status = if terminal_active { "active" } else { "idle" };
 
             detached_column = detached_column.push(
                 container(
                     row![
-                        container(text("●").size(8).color(if terminal_active {
-                            rgb(88, 186, 108)
-                        } else {
-                            rgb(118, 123, 132)
-                        }))
-                        .padding([2, 0])
-                        .width(Length::Fixed(12.0)),
-                        button(text(&terminal.name).size(13).width(Length::Fill))
-                            .padding([3, 4])
-                            .style(move |_, status| tree_main_button_style(status, terminal_active))
-                            .width(Length::Fill)
-                            .on_press(Message::SelectDetachedTerminal(terminal_id.clone())),
-                        text(terminal_status).size(10).color(if terminal_active {
-                            rgb(88, 186, 108)
-                        } else {
-                            rgb(120, 125, 135)
-                        }),
-                        button(text("×").size(14))
-                            .padding([0, 6])
-                            .style(|_, status| delete_button_style(status))
+                        // Left border
+                        container("")
+                            .width(Length::Fixed(2.0))
+                            .height(Length::Fill)
+                            .style(move |_| terminal_left_border_style_active(terminal_active)),
+                        // Status indicator
+                        container(text(if terminal_active { "●" } else { "○" }).size(7).color(
+                            if terminal_active {
+                                rgb(88, 186, 108)
+                            } else {
+                                rgb(118, 123, 132)
+                            }
+                        ))
+                        .padding([0, 4])
+                        .width(Length::Fixed(16.0)),
+                        // Terminal name
+                        button(
+                            container(text(&terminal.name).size(12).wrapping(Wrapping::None))
+                                .width(Length::Fill)
+                                .clip(true)
+                        )
+                        .padding([2, 4])
+                        .style(move |_, status| terminal_button_style(status, terminal_active))
+                        .width(Length::Fill)
+                        .on_press(Message::SelectDetachedTerminal(terminal_id.clone())),
+                        // Delete button
+                        button(text("×").size(12))
+                            .padding([0, 5])
+                            .style(|_, status| subtle_delete_button_style(status))
                             .on_press(Message::RemoveDetachedTerminal(terminal_id_for_action)),
                     ]
                     .spacing(4)
                     .align_y(Alignment::Center),
                 )
-                .padding([3, 8])
+                .padding([4, 8])
                 .style(move |_| terminal_row_style(terminal_active)),
             );
         }
@@ -249,56 +259,65 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
 
         let mut project_column = iced::widget::column![container(
             row![
-                button(text(if project_collapsed { "▸" } else { "▾" }).size(11))
-                    .padding([0, 4])
+                // Expand/collapse chevron
+                button(text(if project_collapsed { "›" } else { "⌄" }).size(18))
+                    .padding([0, 2])
                     .style(|_, status| chevron_button_style(status))
                     .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
+                // Project monogram
                 button(monogram_chip(&project.name))
                     .padding([0, 0])
                     .style(|_, status| tree_icon_button_style(status))
                     .on_press(Message::SelectProject(project_id.clone())),
-                button(text(&project.name).size(14).width(Length::Fill))
-                    .padding([2, 2])
-                    .style(move |_, status| tree_main_button_style(status, active_project))
-                    .width(Length::Fill)
-                    .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
+                // Project name
+                button(
+                    container(text(&project.name).size(14).wrapping(Wrapping::None))
+                        .width(Length::Fill)
+                        .clip(true)
+                )
+                .padding([2, 2])
+                .style(move |_, status| tree_main_button_style(status, active_project))
+                .width(Length::Fill)
+                .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
+                // Stats badge
                 container(
                     text(format!(
-                        "{}·{}",
+                        "{}w · {}t",
                         project.worktrees.len(),
                         project_terminal_count
                     ))
-                    .size(11)
-                    .color(rgb(165, 170, 180))
+                    .size(10)
+                    .color(rgb(145, 150, 160))
                 )
-                .padding([2, 6])
-                .style(|_| count_badge_style()),
-                button(text("⊕").size(12))
-                    .padding([0, 6])
-                    .style(|_, status| action_button_style(status))
+                .padding([3, 6])
+                .style(|_| subtle_badge_style()),
+                // Actions
+                button(text("+").size(12))
+                    .padding([0, 5])
+                    .style(|_, status| subtle_action_button_style(status))
                     .on_press(Message::StartAddWorktree(project_id.clone())),
-                button(text("✎").size(11))
-                    .padding([0, 6])
-                    .style(|_, status| action_button_style(status))
+                button(text("✎").size(10))
+                    .padding([0, 5])
+                    .style(|_, status| subtle_action_button_style(status))
                     .on_press(Message::StartRenameProject(project_id.clone())),
-                button(text("↻").size(11))
-                    .padding([0, 6])
-                    .style(|_, status| action_button_style(status))
+                button(text("↻").size(10))
+                    .padding([0, 5])
+                    .style(|_, status| subtle_action_button_style(status))
                     .on_press(Message::ProjectRescan(project_id.clone())),
             ]
-            .spacing(6)
+            .spacing(5)
             .align_y(Alignment::Center),
         )
-        .padding([6, 8])
+        .padding([8, 10])
         .style(move |_| project_header_style(active_project))]
-        .spacing(2);
+        .spacing(0);
 
         if !project_collapsed {
             for (worktree_index, worktree) in project.worktrees.iter().enumerate() {
                 let worktree_id = worktree.id.clone();
                 let worktree_collapsed = App::worktree_collapsed(project, &worktree_id);
                 let terminal_count = worktree.terminals.len();
-                let worktree_last = worktree_index + 1 == project.worktrees.len();
+                let _worktree_last = worktree_index + 1 == project.worktrees.len();
                 let worktree_selected =
                     project
                         .selected_terminal_id
@@ -313,57 +332,77 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                 project_column = project_column.push(
                     container(
                         row![
-                            text(if worktree_last { "└" } else { "├" })
-                                .size(12)
-                                .color(rgb(72, 78, 90)),
-                            button(text(&worktree.name).size(13).width(Length::Fill))
-                                .padding([3, 4])
-                                .style(move |_, status| tree_main_button_style(
-                                    status,
-                                    worktree_selected
-                                ))
-                                .width(Length::Fill)
+                            // Left border indicator for nesting level
+                            container("")
+                                .width(Length::Fixed(2.0))
+                                .height(Length::Fill)
+                                .style(move |_| worktree_left_border_style(worktree_selected)),
+                            // Expand/collapse chevron
+                            button(text(if worktree_collapsed { "›" } else { "⌄" }).size(16))
+                                .padding([0, 2])
+                                .style(|_, status| chevron_button_style(status))
                                 .on_press(Message::ToggleWorktreeCollapsed {
                                     project_id: project_id.clone(),
                                     worktree_id: worktree_id.clone(),
                                 }),
-                            text(if worktree_collapsed { "▸" } else { "▾" })
-                                .size(11)
-                                .color(rgb(125, 132, 145)),
-                            text(format!("{}t", terminal_count))
-                                .size(10)
-                                .color(rgb(135, 142, 153)),
+                            // Worktree name
+                            button(
+                                container(text(&worktree.name).size(13).wrapping(Wrapping::None))
+                                    .width(Length::Fill)
+                                    .clip(true)
+                            )
+                            .padding([3, 4])
+                            .style(move |_, status| tree_main_button_style(
+                                status,
+                                worktree_selected
+                            ))
+                            .width(Length::Fill)
+                            .on_press(
+                                Message::ToggleWorktreeCollapsed {
+                                    project_id: project_id.clone(),
+                                    worktree_id: worktree_id.clone(),
+                                }
+                            ),
+                            // Terminal count badge
+                            container(
+                                text(format!("{}", terminal_count))
+                                    .size(10)
+                                    .color(rgb(135, 142, 153))
+                            )
+                            .padding([2, 5])
+                            .style(|_| subtle_badge_style()),
+                            // Actions
                             button(text("+").size(12))
-                                .padding([0, 6])
-                                .style(|_, status| action_button_style(status))
+                                .padding([0, 5])
+                                .style(|_, status| subtle_action_button_style(status))
                                 .on_press(Message::AddTerminal {
                                     project_id: project_id.clone(),
                                     worktree_id: worktree_id.clone(),
                                 }),
-                            button(text("✎").size(11))
-                                .padding([0, 6])
-                                .style(|_, status| action_button_style(status))
+                            button(text("✎").size(10))
+                                .padding([0, 5])
+                                .style(|_, status| subtle_action_button_style(status))
                                 .on_press(Message::StartRenameWorktree {
                                     project_id: project_id.clone(),
                                     worktree_id: worktree_id.clone(),
                                 }),
-                            button(text("×").size(14))
-                                .padding([0, 6])
-                                .style(|_, status| delete_button_style(status))
+                            button(text("×").size(13))
+                                .padding([0, 5])
+                                .style(|_, status| subtle_delete_button_style(status))
                                 .on_press(Message::RemoveWorktree {
                                     project_id: project_id.clone(),
                                     worktree_id: worktree_id.clone(),
                                 }),
                         ]
-                        .spacing(5)
+                        .spacing(4)
                         .align_y(Alignment::Center),
                     )
-                    .padding([3, 8])
+                    .padding([4, 8])
                     .style(move |_| worktree_row_style(worktree_selected)),
                 );
 
                 if !worktree_collapsed {
-                    for (terminal_index, terminal) in worktree.terminals.iter().enumerate() {
+                    for (_terminal_index, terminal) in worktree.terminals.iter().enumerate() {
                         let terminal_id = terminal.id.clone();
                         let terminal_id_for_action = terminal_id.clone();
                         let terminal_active = active_project
@@ -371,41 +410,56 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                                 .selected_terminal_id
                                 .as_ref()
                                 .is_some_and(|selected| selected == &terminal_id);
-                        let terminal_last = terminal_index + 1 == worktree.terminals.len();
-                        let parent_branch = if worktree_last { " " } else { "│" };
-                        let leaf_branch = if terminal_last { "└" } else { "├" };
-                        let terminal_status = if terminal_active { "active" } else { "idle" };
 
                         project_column = project_column.push(
                             container(
                                 row![
-                                    text(parent_branch).size(12).color(rgb(68, 74, 86)),
-                                    text(leaf_branch).size(12).color(rgb(74, 80, 92)),
-                                    container(text("●").size(8).color(if terminal_active {
-                                        rgb(88, 186, 108)
-                                    } else {
-                                        rgb(118, 123, 132)
-                                    }))
-                                    .padding([2, 0])
-                                    .width(Length::Fixed(12.0)),
-                                    button(text(&terminal.name).size(13).width(Length::Fill))
-                                        .padding([3, 4])
-                                        .style(move |_, status| {
-                                            tree_main_button_style(status, terminal_active)
-                                        })
+                                    // Double left border for nested terminal
+                                    container("")
+                                        .width(Length::Fixed(2.0))
+                                        .height(Length::Fill)
+                                        .style(|_| terminal_left_border_style()),
+                                    container("")
+                                        .width(Length::Fixed(2.0))
+                                        .height(Length::Fill)
+                                        .style(move |_| terminal_left_border_style_active(
+                                            terminal_active
+                                        )),
+                                    // Status indicator
+                                    container(
+                                        text(if terminal_active { "●" } else { "○" })
+                                            .size(7)
+                                            .color(if terminal_active {
+                                                rgb(88, 186, 108)
+                                            } else {
+                                                rgb(118, 123, 132)
+                                            })
+                                    )
+                                    .padding([0, 4])
+                                    .width(Length::Fixed(16.0)),
+                                    // Terminal name
+                                    button(
+                                        container(
+                                            text(&terminal.name).size(12).wrapping(Wrapping::None)
+                                        )
                                         .width(Length::Fill)
-                                        .on_press(Message::SelectTerminal {
+                                        .clip(true)
+                                    )
+                                    .padding([2, 4])
+                                    .style(move |_, status| {
+                                        terminal_button_style(status, terminal_active)
+                                    })
+                                    .width(Length::Fill)
+                                    .on_press(
+                                        Message::SelectTerminal {
                                             project_id: project_id.clone(),
                                             terminal_id: terminal_id.clone(),
-                                        }),
-                                    text(terminal_status).size(10).color(if terminal_active {
-                                        rgb(88, 186, 108)
-                                    } else {
-                                        rgb(120, 125, 135)
-                                    }),
-                                    button(text("×").size(14))
-                                        .padding([0, 6])
-                                        .style(|_, status| delete_button_style(status))
+                                        }
+                                    ),
+                                    // Delete button
+                                    button(text("×").size(12))
+                                        .padding([0, 5])
+                                        .style(|_, status| subtle_delete_button_style(status))
                                         .on_press(Message::RemoveTerminal {
                                             project_id: project_id.clone(),
                                             worktree_id: worktree_id.clone(),
@@ -1159,6 +1213,169 @@ fn input_style(status: text_input::Status) -> TextInputStyle {
             style.value = rgb(120, 126, 136);
         }
         text_input::Status::Active => {}
+    }
+
+    style
+}
+
+// New styles for cleaner tree design
+fn subtle_badge_style() -> ContainerStyle {
+    ContainerStyle {
+        background: Some(Background::Color(rgb(32, 36, 44))),
+        border: Border {
+            width: 1.0,
+            color: rgb(44, 50, 62),
+            radius: 10.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn subtle_action_button_style(status: button::Status) -> button::Style {
+    let mut style = button::Style {
+        background: Some(Background::Color(Color::TRANSPARENT)),
+        text_color: rgb(140, 148, 162),
+        border: Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    };
+
+    match status {
+        button::Status::Hovered => {
+            style.background = Some(Background::Color(rgb(40, 46, 58)));
+            style.text_color = rgb(200, 208, 220);
+        }
+        button::Status::Pressed => {
+            style.background = Some(Background::Color(rgb(34, 40, 52)));
+        }
+        button::Status::Disabled => {
+            style.text_color = rgb(100, 108, 122);
+        }
+        button::Status::Active => {}
+    }
+
+    style
+}
+
+fn subtle_delete_button_style(status: button::Status) -> button::Style {
+    let mut style = button::Style {
+        background: Some(Background::Color(Color::TRANSPARENT)),
+        text_color: rgb(160, 120, 120),
+        border: Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    };
+
+    match status {
+        button::Status::Hovered => {
+            style.background = Some(Background::Color(rgb(55, 35, 38)));
+            style.text_color = rgb(220, 160, 160);
+        }
+        button::Status::Pressed => {
+            style.background = Some(Background::Color(rgb(45, 30, 32)));
+        }
+        button::Status::Disabled => {
+            style.text_color = rgb(110, 100, 100);
+        }
+        button::Status::Active => {}
+    }
+
+    style
+}
+
+fn worktree_left_border_style(active: bool) -> ContainerStyle {
+    ContainerStyle {
+        background: Some(Background::Color(if active {
+            rgb(88, 120, 168)
+        } else {
+            rgb(45, 52, 68)
+        })),
+        border: Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn terminal_left_border_style() -> ContainerStyle {
+    ContainerStyle {
+        background: Some(Background::Color(rgb(35, 40, 52))),
+        border: Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn terminal_left_border_style_active(active: bool) -> ContainerStyle {
+    ContainerStyle {
+        background: Some(Background::Color(if active {
+            rgb(88, 186, 108)
+        } else {
+            rgb(55, 62, 78)
+        })),
+        border: Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn terminal_button_style(status: button::Status, active: bool) -> button::Style {
+    let base_bg = if active {
+        rgb(45, 55, 75)
+    } else {
+        Color::TRANSPARENT
+    };
+    let base_fg = if active {
+        rgb(235, 238, 245)
+    } else {
+        rgb(195, 200, 210)
+    };
+
+    let mut style = button::Style {
+        background: Some(Background::Color(base_bg)),
+        text_color: base_fg,
+        border: Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    };
+
+    match status {
+        button::Status::Hovered => {
+            if !active {
+                style.background = Some(Background::Color(rgb(35, 42, 55)));
+                style.text_color = rgb(215, 220, 230);
+            } else {
+                style.background = Some(Background::Color(rgb(55, 65, 88)));
+            }
+        }
+        button::Status::Pressed => {
+            if !active {
+                style.background = Some(Background::Color(rgb(30, 36, 48)));
+            } else {
+                style.background = Some(Background::Color(rgb(50, 60, 82)));
+            }
+        }
+        button::Status::Disabled => {
+            style.text_color = rgb(115, 120, 130);
+        }
+        button::Status::Active => {}
     }
 
     style
