@@ -91,11 +91,27 @@ impl RuntimeSession {
             pane.ghostty.tick_if_needed();
         }
 
-        // NOTE: We no longer auto-remove exited panes here.
-        // Instead, the CommandFinished action from Ghostty will set the terminal status,
-        // and users can manually close with Cmd+W or the × button.
+        // Auto-remove split panes that have exited (but keep at least one pane)
+        let exited: Vec<String> = self
+            .panes
+            .iter()
+            .filter(|(_, pane)| pane.ghostty.process_exited())
+            .map(|(pane_id, _)| pane_id.clone())
+            .collect();
 
-        had_pending_work
+        let mut changed = false;
+        for pane_id in exited {
+            // Only remove if there's more than one pane (i.e., it's a split)
+            if self.panes.len() > 1 {
+                changed |= self.remove_pane(&pane_id);
+            }
+        }
+
+        if changed {
+            self.clear_active_input_modes();
+        }
+
+        changed || had_pending_work
     }
 
     pub(crate) fn drain_actions(&mut self) -> Vec<GhosttyRuntimeAction> {
