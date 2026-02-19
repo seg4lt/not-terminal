@@ -1,7 +1,8 @@
 use super::state::{App, Message};
+use iced::mouse::Interaction;
 use iced::widget::{
-    button, checkbox, container, container::Style as ContainerStyle, opaque, row, scrollable,
-    stack, text, text_input, text_input::Style as TextInputStyle,
+    button, checkbox, container, container::Style as ContainerStyle, mouse_area, opaque, row,
+    scrollable, stack, text, text_input, text_input::Style as TextInputStyle,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
@@ -11,7 +12,7 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
         .height(Length::Fill)
         .style(|_| surface_style());
 
-    let content: Element<'_, Message> = if app.sidebar_collapsed {
+    let content: Element<'_, Message> = if app.sidebar_state.is_hidden() {
         container(terminal_area)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -24,7 +25,7 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
             .into()
     };
 
-    let base: Element<'_, Message> = if app.sidebar_collapsed {
+    let base: Element<'_, Message> = if app.sidebar_state.is_hidden() {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -52,7 +53,7 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
 fn top_bar_view(app: &App) -> Element<'_, Message> {
     let mut bar = row![].width(Length::Fill).height(Length::Fill);
 
-    if !app.sidebar_collapsed {
+    if !app.sidebar_state.is_hidden() {
         let controls = row![
             button(text("◁").size(13))
                 .padding([0, 7])
@@ -89,9 +90,7 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
     let context_label = if let Some(context) = app.active_terminal_context() {
         let breadcrumb = format!(
             "{} / {} / {}",
-            truncate_label(&context.project_name),
-            truncate_label(&context.worktree_name),
-            truncate_label(&context.terminal_name)
+            &context.project_name, &context.worktree_name, &context.terminal_name
         );
         breadcrumb
     } else {
@@ -132,34 +131,32 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
     let active_terminal_id = app.active_terminal_id();
     let detached_active = app.persisted.selected_detached_terminal_id.is_some();
 
-    let mut detached_column = iced::widget::column![
-        container(
-            row![
-                button(detached_icon_chip())
-                    .padding([0, 0])
-                    .style(|_, status| tree_icon_button_style(status)),
-                text("Detached")
-                    .size(13)
-                    .color(rgb(226, 229, 235))
-                    .width(Length::Fill),
-                container(
-                    text(format!("{}", app.persisted.detached_terminals.len()))
-                        .size(11)
-                        .color(rgb(180, 185, 195))
-                )
-                .padding([2, 6])
-                .style(|_| count_badge_style()),
-                button(text("+").size(12))
-                    .padding([0, 6])
-                    .style(|_, status| action_button_style(status))
-                    .on_press(Message::AddProject),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        )
-        .padding([6, 8])
-        .style(move |_| project_header_style(detached_active))
-    ]
+    let mut detached_column = iced::widget::column![container(
+        row![
+            button(detached_icon_chip())
+                .padding([0, 0])
+                .style(|_, status| tree_icon_button_style(status)),
+            text("Detached")
+                .size(13)
+                .color(rgb(226, 229, 235))
+                .width(Length::Fill),
+            container(
+                text(format!("{}", app.persisted.detached_terminals.len()))
+                    .size(11)
+                    .color(rgb(180, 185, 195))
+            )
+            .padding([2, 6])
+            .style(|_| count_badge_style()),
+            button(text("+").size(12))
+                .padding([0, 6])
+                .style(|_, status| action_button_style(status))
+                .on_press(Message::AddProject),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding([6, 8])
+    .style(move |_| project_header_style(detached_active))]
     .spacing(2);
 
     if app.persisted.detached_terminals.is_empty() {
@@ -190,7 +187,7 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                         }))
                         .padding([2, 0])
                         .width(Length::Fixed(12.0)),
-                        button(text(truncate_label(&terminal.name)).size(13))
+                        button(text(&terminal.name).size(13).width(Length::Fill))
                             .padding([3, 4])
                             .style(move |_, status| tree_main_button_style(status, terminal_active))
                             .width(Length::Fill)
@@ -250,52 +247,50 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
             .map(|worktree| worktree.terminals.len())
             .sum::<usize>();
 
-        let mut project_column = iced::widget::column![
-            container(
-                row![
-                    button(text(if project_collapsed { "▸" } else { "▾" }).size(11))
-                        .padding([0, 4])
-                        .style(|_, status| chevron_button_style(status))
-                        .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
-                    button(monogram_chip(&project.name))
-                        .padding([0, 0])
-                        .style(|_, status| tree_icon_button_style(status))
-                        .on_press(Message::SelectProject(project_id.clone())),
-                    button(text(truncate_label(&project.name)).size(14))
-                        .padding([2, 2])
-                        .style(move |_, status| tree_main_button_style(status, active_project))
-                        .width(Length::Fill)
-                        .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
-                    container(
-                        text(format!(
-                            "{}·{}",
-                            project.worktrees.len(),
-                            project_terminal_count
-                        ))
-                        .size(11)
-                        .color(rgb(165, 170, 180))
-                    )
-                    .padding([2, 6])
-                    .style(|_| count_badge_style()),
-                    button(text("⊕").size(12))
-                        .padding([0, 6])
-                        .style(|_, status| action_button_style(status))
-                        .on_press(Message::StartAddWorktree(project_id.clone())),
-                    button(text("✎").size(11))
-                        .padding([0, 6])
-                        .style(|_, status| action_button_style(status))
-                        .on_press(Message::StartRenameProject(project_id.clone())),
-                    button(text("↻").size(11))
-                        .padding([0, 6])
-                        .style(|_, status| action_button_style(status))
-                        .on_press(Message::ProjectRescan(project_id.clone())),
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center),
-            )
-            .padding([6, 8])
-            .style(move |_| project_header_style(active_project))
-        ]
+        let mut project_column = iced::widget::column![container(
+            row![
+                button(text(if project_collapsed { "▸" } else { "▾" }).size(11))
+                    .padding([0, 4])
+                    .style(|_, status| chevron_button_style(status))
+                    .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
+                button(monogram_chip(&project.name))
+                    .padding([0, 0])
+                    .style(|_, status| tree_icon_button_style(status))
+                    .on_press(Message::SelectProject(project_id.clone())),
+                button(text(&project.name).size(14).width(Length::Fill))
+                    .padding([2, 2])
+                    .style(move |_, status| tree_main_button_style(status, active_project))
+                    .width(Length::Fill)
+                    .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
+                container(
+                    text(format!(
+                        "{}·{}",
+                        project.worktrees.len(),
+                        project_terminal_count
+                    ))
+                    .size(11)
+                    .color(rgb(165, 170, 180))
+                )
+                .padding([2, 6])
+                .style(|_| count_badge_style()),
+                button(text("⊕").size(12))
+                    .padding([0, 6])
+                    .style(|_, status| action_button_style(status))
+                    .on_press(Message::StartAddWorktree(project_id.clone())),
+                button(text("✎").size(11))
+                    .padding([0, 6])
+                    .style(|_, status| action_button_style(status))
+                    .on_press(Message::StartRenameProject(project_id.clone())),
+                button(text("↻").size(11))
+                    .padding([0, 6])
+                    .style(|_, status| action_button_style(status))
+                    .on_press(Message::ProjectRescan(project_id.clone())),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .padding([6, 8])
+        .style(move |_| project_header_style(active_project))]
         .spacing(2);
 
         if !project_collapsed {
@@ -321,10 +316,7 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                             text(if worktree_last { "└" } else { "├" })
                                 .size(12)
                                 .color(rgb(72, 78, 90)),
-                            text(worktree_badge(&worktree.path))
-                                .size(10)
-                                .color(rgb(135, 140, 152)),
-                            button(text(truncate_label(&worktree.name)).size(13))
+                            button(text(&worktree.name).size(13).width(Length::Fill))
                                 .padding([3, 4])
                                 .style(move |_, status| tree_main_button_style(
                                     status,
@@ -396,7 +388,7 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                                     }))
                                     .padding([2, 0])
                                     .width(Length::Fixed(12.0)),
-                                    button(text(truncate_label(&terminal.name)).size(13))
+                                    button(text(&terminal.name).size(13).width(Length::Fill))
                                         .padding([3, 4])
                                         .style(move |_, status| {
                                             tree_main_button_style(status, terminal_active)
@@ -443,27 +435,40 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
         .style(|_| status_bar_style()),
     );
 
-    container(scrollable(list))
+    let sidebar_content = container(scrollable(list))
         .padding([6, 6])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_| sidebar_style());
+
+    // Resize handle at the right edge
+    let resize_handle = mouse_area(
+        container("")
+            .width(Length::Fixed(6.0))
+            .height(Length::Fill)
+            .style(|_| resize_handle_style()),
+    )
+    .on_press(Message::SidebarResizeHandlePressed)
+    .on_release(Message::SidebarResizeHandleReleased)
+    .interaction(Interaction::ResizingHorizontally);
+
+    row![sidebar_content, resize_handle]
         .width(Length::Fixed(app.sidebar_width_logical()))
         .height(Length::Fill)
-        .style(|_| sidebar_style())
         .into()
 }
 
 fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
     if app.quick_open_open {
         let entries = app.quick_open_entries();
-        let mut list = iced::widget::column![
-            text_input("Search terminal", &app.quick_open_query)
-                .id("quick-open-input")
-                .on_input(Message::QuickOpenQueryChanged)
-                .on_submit(Message::QuickOpenSubmit)
-                .padding(6)
-                .size(14)
-                .style(|_, status| input_style(status))
-                .width(Length::Fill)
-        ]
+        let mut list = iced::widget::column![text_input("Search terminal", &app.quick_open_query)
+            .id("quick-open-input")
+            .on_input(Message::QuickOpenQueryChanged)
+            .on_submit(Message::QuickOpenSubmit)
+            .padding(6)
+            .size(14)
+            .style(|_, status| input_style(status))
+            .width(Length::Fill)]
         .spacing(6)
         .width(Length::Fill);
 
@@ -691,18 +696,6 @@ fn monogram(name: &str) -> String {
     }
 }
 
-fn worktree_badge(path: &str) -> &'static str {
-    if path.contains("/.git/worktrees/") || path.contains("\\.git\\worktrees\\") {
-        "[W]"
-    } else {
-        "[M]"
-    }
-}
-
-fn truncate_label(value: &str) -> String {
-    value.chars().take(15).collect()
-}
-
 fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::from_rgb8(r, g, b)
 }
@@ -753,6 +746,18 @@ fn sidebar_style() -> ContainerStyle {
         border: Border {
             width: 1.0,
             color: rgb(26, 30, 40),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn resize_handle_style() -> ContainerStyle {
+    ContainerStyle {
+        background: Some(Background::Color(rgb(22, 25, 33))),
+        border: Border {
+            width: 0.0,
+            color: Color::TRANSPARENT,
             ..Default::default()
         },
         ..Default::default()

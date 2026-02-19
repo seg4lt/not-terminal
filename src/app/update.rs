@@ -228,22 +228,50 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             match event {
                 mouse::Event::CursorMoved { position } => {
                     app.cursor_position_logical = Some(position);
-                    let local = app.terminal_local_from_position(position);
-                    if let Some(ghostty) = app.active_ghostty_mut() {
-                        match local {
-                            Some((x, y)) => ghostty.handle_mouse_move(x, y, modifiers),
-                            None => ghostty.handle_mouse_move(-1.0, -1.0, modifiers),
+                    
+                    // Handle sidebar resizing
+                    if app.sidebar_resizing {
+                        let new_width = position.x.clamp(
+                            super::state::SIDEBAR_WIDTH_MIN,
+                            super::state::SIDEBAR_WIDTH_MAX.min(app.window_size.width - 50.0),
+                        );
+                        if (new_width - app.sidebar_width).abs() > 0.5 {
+                            app.sidebar_width = new_width;
+                            app.sync_runtime_views();
+                        }
+                    } else {
+                        let local = app.terminal_local_from_position(position);
+                        if let Some(ghostty) = app.active_ghostty_mut() {
+                            match local {
+                                Some((x, y)) => ghostty.handle_mouse_move(x, y, modifiers),
+                                None => ghostty.handle_mouse_move(-1.0, -1.0, modifiers),
+                            }
                         }
                     }
                 }
                 mouse::Event::CursorLeft => {
                     app.cursor_position_logical = None;
+                    // Stop resizing if cursor leaves window
+                    if app.sidebar_resizing {
+                        app.sidebar_resizing = false;
+                        return app.save_task();
+                    }
                     if let Some(ghostty) = app.active_ghostty_mut() {
                         ghostty.handle_mouse_move(-1.0, -1.0, modifiers);
                     }
                 }
                 mouse::Event::ButtonPressed(button) | mouse::Event::ButtonReleased(button) => {
                     let pressed = matches!(event, mouse::Event::ButtonPressed(_));
+                    
+                    // Don't process terminal mouse events if we're resizing
+                    if app.sidebar_resizing {
+                        if !pressed {
+                            app.sidebar_resizing = false;
+                            return app.save_task();
+                        }
+                        return Task::none();
+                    }
+                    
                     let mut focus_changed = false;
                     let local = if pressed {
                         app.cursor_position_logical.and_then(|position| {
@@ -277,6 +305,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                     }
                 }
                 mouse::Event::WheelScrolled { delta } => {
+                    // Don't scroll terminal if we're resizing
+                    if app.sidebar_resizing {
+                        return Task::none();
+                    }
+                    
                     let local = app
                         .cursor_position_logical
                         .and_then(|position| app.terminal_local_from_position(position));
@@ -681,6 +714,17 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.branch_by_terminal.insert(terminal_id, branch);
             } else {
                 app.branch_by_terminal.remove(&terminal_id);
+            }
+            Task::none()
+        }
+        Message::SidebarResizeHandlePressed => {
+            app.sidebar_resizing = true;
+            Task::none()
+        }
+        Message::SidebarResizeHandleReleased => {
+            if app.sidebar_resizing {
+                app.sidebar_resizing = false;
+                return app.save_task();
             }
             Task::none()
         }

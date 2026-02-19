@@ -17,8 +17,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-pub(crate) const SIDEBAR_WIDTH_EXPANDED: f32 = 248.0;
-pub(crate) const SIDEBAR_WIDTH_COMPACT: f32 = 52.0;
+pub(crate) const SIDEBAR_WIDTH_MIN: f32 = 150.0;
+pub(crate) const SIDEBAR_WIDTH_MAX: f32 = 500.0;
+pub(crate) const SIDEBAR_WIDTH_DEFAULT: f32 = 248.0;
 const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
 
 /// Represents the different states of the sidebar
@@ -26,8 +27,6 @@ const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
 pub(crate) enum SidebarState {
     /// Sidebar is completely hidden
     Hidden,
-    /// Sidebar shows only icon chips and status indicators (compact mode)
-    Compact,
     /// Sidebar shows full details (expanded mode)
     Expanded,
 }
@@ -43,26 +42,13 @@ impl SidebarState {
         matches!(self, Self::Hidden)
     }
 
-    pub(crate) fn is_compact(&self) -> bool {
-        matches!(self, Self::Compact)
-    }
-
     pub(crate) fn is_expanded(&self) -> bool {
         matches!(self, Self::Expanded)
     }
 
-    pub(crate) fn width(&self) -> f32 {
-        match self {
-            Self::Hidden => 0.0,
-            Self::Compact => SIDEBAR_WIDTH_COMPACT,
-            Self::Expanded => SIDEBAR_WIDTH_EXPANDED,
-        }
-    }
-
     pub(crate) fn toggle(&self) -> Self {
         match self {
-            Self::Hidden => Self::Compact,
-            Self::Compact => Self::Expanded,
+            Self::Hidden => Self::Expanded,
             Self::Expanded => Self::Hidden,
         }
     }
@@ -137,6 +123,8 @@ pub(crate) struct App {
     pub(crate) status: String,
     pub(crate) filter_query: String,
     pub(crate) sidebar_state: SidebarState,
+    pub(crate) sidebar_width: f32,
+    pub(crate) sidebar_resizing: bool,
     pub(crate) show_native_title_bar: bool,
     pub(crate) preferences_open: bool,
     pub(crate) quick_open_open: bool,
@@ -218,16 +206,18 @@ pub(crate) enum Message {
         worktree_id: String,
     },
     SwitchTerminalByOffset(i32),
-    ActiveBranchResolved {
-        terminal_id: String,
-        branch: Option<String>,
-    },
-}
+        ActiveBranchResolved {
+            terminal_id: String,
+            branch: Option<String>,
+        },
+        SidebarResizeHandlePressed,
+        SidebarResizeHandleReleased,
+    }
 
 impl App {
     pub(crate) fn boot() -> (Self, Task<Message>) {
         let app = Self {
-            title: String::from("Iced + Ghostty Projects"),
+            title: String::from("Not Terminal"),
             window_id: None,
             window_size: Size::new(1280.0, 820.0),
             window_scale_factor: 1.0,
@@ -239,6 +229,8 @@ impl App {
             status: String::from("Ready"),
             filter_query: String::new(),
             sidebar_state: SidebarState::Expanded,
+            sidebar_width: SIDEBAR_WIDTH_DEFAULT,
+            sidebar_resizing: false,
             show_native_title_bar: crate::app::initial_show_native_title_bar(),
             preferences_open: false,
             quick_open_open: false,
@@ -302,6 +294,12 @@ impl App {
         } else {
             SidebarState::Expanded
         };
+        // Load persisted sidebar width, clamped to valid range
+        self.sidebar_width = self
+            .persisted
+            .ui
+            .sidebar_width
+            .clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
         self.show_native_title_bar = self.persisted.ui.show_native_title_bar;
         self.filter_query.clear();
         self.normalize_selection();
@@ -313,6 +311,7 @@ impl App {
         snapshot.ui = UiState {
             sidebar_collapsed: self.sidebar_state.is_hidden(),
             show_native_title_bar: self.show_native_title_bar,
+            sidebar_width: self.sidebar_width,
         };
 
         Task::perform(
@@ -329,9 +328,13 @@ impl App {
     }
 
     pub(crate) fn sidebar_width_logical(&self) -> f32 {
-        self.sidebar_state.width()
-            .max(0.0)
-            .min(self.window_size.width.max(1.0) - 1.0)
+        if self.sidebar_state.is_hidden() {
+            0.0
+        } else {
+            self.sidebar_width
+                .clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+                .min(self.window_size.width.max(1.0) - 1.0)
+        }
     }
 
     pub(crate) fn terminal_frame_logical(&self) -> (f32, f32, f32, f32) {

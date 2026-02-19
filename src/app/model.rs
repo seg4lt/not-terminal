@@ -35,6 +35,8 @@ pub(crate) struct UiState {
     pub(crate) sidebar_collapsed: bool,
     #[serde(default = "default_show_native_title_bar")]
     pub(crate) show_native_title_bar: bool,
+    #[serde(default = "default_sidebar_width")]
+    pub(crate) sidebar_width: f32,
 }
 
 impl Default for UiState {
@@ -42,8 +44,13 @@ impl Default for UiState {
         Self {
             sidebar_collapsed: false,
             show_native_title_bar: default_show_native_title_bar(),
+            sidebar_width: default_sidebar_width(),
         }
     }
+}
+
+pub(crate) const fn default_sidebar_width() -> f32 {
+    248.0
 }
 
 #[cfg(target_os = "macos")]
