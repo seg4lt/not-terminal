@@ -52,6 +52,20 @@ pub enum GhosttyRuntimeAction {
         surface_ptr: usize,
         direction: i32,
     },
+    CommandFinished {
+        surface_ptr: usize,
+        exit_code: i16,
+    },
+    RingBell {
+        surface_ptr: usize,
+    },
+    SetTitle {
+        surface_ptr: usize,
+        title: String,
+    },
+    DesktopNotification {
+        surface_ptr: usize,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -89,13 +103,29 @@ mod macos {
     }
 
     #[repr(C)]
-    #[derive(Copy, Clone, Default)]
+    #[derive(Copy, Clone)]
     struct RuntimeQueuedAction {
         tag: u32,
         surface: usize,
         arg0: i32,
         amount: u16,
         reserved: u16,
+        ptr: usize,  // For passing pointers (e.g., title strings)
+        title_copy: [u8; 256],  // Buffer containing the copied title string
+    }
+
+    impl Default for RuntimeQueuedAction {
+        fn default() -> Self {
+            Self {
+                tag: 0,
+                surface: 0,
+                arg0: 0,
+                amount: 0,
+                reserved: 0,
+                ptr: 0,
+                title_copy: [0u8; 256],
+            }
+        }
     }
 
     const GHOSTTY_ACTION_RELEASE: c_int = 0;
@@ -109,6 +139,10 @@ mod macos {
     const RUST_GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM: u32 = 5;
     const RUST_GHOSTTY_ACTION_NEW_TAB: u32 = 6;
     const RUST_GHOSTTY_ACTION_GOTO_TAB: u32 = 7;
+    const RUST_GHOSTTY_ACTION_COMMAND_FINISHED: u32 = 8;
+    const RUST_GHOSTTY_ACTION_RING_BELL: u32 = 9;
+    const RUST_GHOSTTY_ACTION_SET_TITLE: u32 = 10;
+    const RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION: u32 = 11;
 
     const GHOSTTY_SPLIT_DIRECTION_RIGHT: i32 = 0;
     const GHOSTTY_SPLIT_DIRECTION_DOWN: i32 = 1;
@@ -167,6 +201,7 @@ mod macos {
         fn ghostty_app_set_focus(app: *mut c_void, focused: bool);
         fn ghostty_surface_new(app: *mut c_void, config: *const c_void) -> *mut c_void;
         fn ghostty_surface_free(surface: *mut c_void);
+        #[allow(dead_code)]
         fn ghostty_surface_process_exited(surface: *mut c_void) -> bool;
         fn ghostty_surface_set_size(surface: *mut c_void, width: u32, height: u32);
         fn ghostty_surface_set_content_scale(surface: *mut c_void, x: f64, y: f64);
@@ -363,6 +398,7 @@ mod macos {
             }
         }
 
+        #[allow(dead_code)]
         pub fn process_exited(&self) -> bool {
             unsafe { ghostty_surface_process_exited(self.surface) }
         }
@@ -808,6 +844,31 @@ mod macos {
                 surface_ptr: raw.surface,
                 direction: raw.arg0,
             }),
+            RUST_GHOSTTY_ACTION_COMMAND_FINISHED => {
+                let exit_code = raw.arg0 as i16;
+                Some(GhosttyRuntimeAction::CommandFinished {
+                    surface_ptr: raw.surface,
+                    exit_code,
+                })
+            }
+            RUST_GHOSTTY_ACTION_RING_BELL => Some(GhosttyRuntimeAction::RingBell {
+                surface_ptr: raw.surface,
+            }),
+            RUST_GHOSTTY_ACTION_SET_TITLE => {
+                // The title has been copied into title_copy buffer in the Objective-C shim
+                // Find the null terminator to get the actual string length
+                let len = raw.title_copy.iter().position(|&b| b == 0).unwrap_or(256);
+                let title = String::from_utf8_lossy(&raw.title_copy[..len]).to_string();
+                Some(GhosttyRuntimeAction::SetTitle {
+                    surface_ptr: raw.surface,
+                    title,
+                })
+            }
+            RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION => {
+                Some(GhosttyRuntimeAction::DesktopNotification {
+                    surface_ptr: raw.surface,
+                })
+            }
             _ => None,
         }
     }

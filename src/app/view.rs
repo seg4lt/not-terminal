@@ -1,4 +1,4 @@
-use super::state::{App, Message};
+use super::state::{App, Message, TerminalStatus};
 use iced::mouse::Interaction;
 use iced::widget::text::Wrapping;
 use iced::widget::{
@@ -127,6 +127,79 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
         .into()
 }
 
+/// Get the status indicator symbol and color for a terminal
+fn terminal_status_indicator(
+    app: &App,
+    terminal_id: &str,
+    is_active: bool,
+) -> (&'static str, Color) {
+    let status = app.get_terminal_status(terminal_id);
+    let is_awaiting = app.is_awaiting_response(terminal_id);
+
+    // Check awaiting state first (takes precedence)
+    if is_awaiting || matches!(status, TerminalStatus::AwaitingResponse) {
+        return ("🔔", rgb(220, 180, 50));
+    }
+
+    match status {
+        TerminalStatus::Running => {
+            // Active = green filled circle, idle = gray hollow circle
+            if is_active {
+                ("●", rgb(88, 186, 108))
+            } else {
+                ("○", rgb(118, 123, 132))
+            }
+        }
+        TerminalStatus::Success => {
+            // Green checkmark
+            ("✓", rgb(88, 186, 108))
+        }
+        TerminalStatus::Error(_code) => {
+            // Red X
+            ("✗", rgb(220, 80, 80))
+        }
+        TerminalStatus::AwaitingResponse => {
+            // Should be handled above, but include for completeness
+            ("🔔", rgb(255, 140, 0))  // Orange
+        }
+    }
+}
+
+/// Get the border color for a terminal based on its status
+fn terminal_status_border_color(
+    app: &App,
+    terminal_id: &str,
+    is_active: bool,
+) -> Color {
+    let status = app.get_terminal_status(terminal_id);
+    let is_awaiting = app.is_awaiting_response(terminal_id);
+
+    // Check awaiting state first (takes precedence)
+    if is_awaiting || matches!(status, TerminalStatus::AwaitingResponse) {
+        return rgb(255, 140, 0);  // Orange
+    }
+
+    match status {
+        TerminalStatus::Running => {
+            if is_active {
+                rgb(88, 186, 108)  // Green
+            } else {
+                rgb(55, 62, 78)  // Dark gray
+            }
+        }
+        TerminalStatus::Success => {
+            rgb(88, 186, 108)  // Green
+        }
+        TerminalStatus::Error(_) => {
+            rgb(220, 80, 80)  // Red
+        }
+        TerminalStatus::AwaitingResponse => {
+            // Should be handled above, but include for completeness
+            rgb(220, 180, 50)  // Amber
+        }
+    }
+}
+
 fn sidebar_view(app: &App) -> Element<'_, Message> {
     let project_indices = app.filtered_project_indices();
     let mut list = iced::widget::column![].spacing(10).width(Length::Fill);
@@ -178,34 +251,61 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                 .as_ref()
                 .is_some_and(|active| active == &terminal_id);
 
+            // Get status-based indicator
+            let (status_symbol, status_color) = terminal_status_indicator(app, &terminal_id, terminal_active);
+            let border_color = terminal_status_border_color(app, &terminal_id, terminal_active);
+
             detached_column = detached_column.push(
                 container(
                     row![
-                        // Left border
+                        // Left border with status color
                         container("")
                             .width(Length::Fixed(2.0))
                             .height(Length::Fill)
-                            .style(move |_| terminal_left_border_style_active(terminal_active)),
+                            .style(move |_| ContainerStyle {
+                                background: Some(Background::Color(border_color)),
+                                ..Default::default()
+                            }),
                         // Status indicator
-                        container(text(if terminal_active { "●" } else { "○" }).size(7).color(
-                            if terminal_active {
-                                rgb(88, 186, 108)
-                            } else {
-                                rgb(118, 123, 132)
-                            }
-                        ))
+                        container(text(status_symbol).size(7).color(status_color))
                         .padding([0, 4])
                         .width(Length::Fixed(16.0)),
-                        // Terminal name
-                        button(
-                            container(text(&terminal.name).size(12).wrapping(Wrapping::None))
+                        // Terminal name (with exit code badge if error)
+                        {
+                            let name_element = text(&terminal.name).size(12).wrapping(Wrapping::None);
+                            let name_with_badge = if let TerminalStatus::Error(code) = app.get_terminal_status(&terminal_id) {
+                                row![
+                                    container(name_element)
+                                        .width(Length::Fill)
+                                        .clip(true),
+                                    container(text(format!("{}", code)).size(9).color(rgb(220, 80, 80)))
+                                        .padding([1, 4])
+                                        .style(|_| ContainerStyle {
+                                            background: Some(Background::Color(rgb(40, 30, 32))),
+                                            border: Border {
+                                                width: 1.0,
+                                                color: rgb(70, 50, 54),
+                                                radius: 8.0.into(),
+                                            },
+                                            ..Default::default()
+                                        }),
+                                ]
+                                .spacing(4)
                                 .width(Length::Fill)
-                                .clip(true)
-                        )
-                        .padding([2, 4])
-                        .style(move |_, status| terminal_button_style(status, terminal_active))
-                        .width(Length::Fill)
-                        .on_press(Message::SelectDetachedTerminal(terminal_id.clone())),
+                            } else {
+                                row![container(name_element).width(Length::Fill).clip(true)]
+                                    .width(Length::Fill)
+                            };
+                            button(
+                                container(name_with_badge)
+                                    .width(Length::Fill)
+                                    .clip(true)
+                            )
+                            .padding([2, 4])
+                            .style(move |_, status| terminal_button_style(status, terminal_active))
+                            .width(Length::Fill)
+                            .on_press(Message::SelectDetachedTerminal(terminal_id.clone()))
+                        },
                         // Delete button
                         button(text("×").size(12))
                             .padding([0, 5])
@@ -411,6 +511,10 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                                 .as_ref()
                                 .is_some_and(|selected| selected == &terminal_id);
 
+                        // Get status-based indicator
+                        let (status_symbol, status_color) = terminal_status_indicator(app, &terminal_id, terminal_active);
+                        let border_color = terminal_status_border_color(app, &terminal_id, terminal_active);
+
                         project_column = project_column.push(
                             container(
                                 row![
@@ -422,40 +526,57 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
                                     container("")
                                         .width(Length::Fixed(2.0))
                                         .height(Length::Fill)
-                                        .style(move |_| terminal_left_border_style_active(
-                                            terminal_active
-                                        )),
+                                        .style(move |_| ContainerStyle {
+                                            background: Some(Background::Color(border_color)),
+                                            ..Default::default()
+                                        }),
                                     // Status indicator
-                                    container(
-                                        text(if terminal_active { "●" } else { "○" })
-                                            .size(7)
-                                            .color(if terminal_active {
-                                                rgb(88, 186, 108)
-                                            } else {
-                                                rgb(118, 123, 132)
-                                            })
-                                    )
+                                    container(text(status_symbol).size(7).color(status_color))
                                     .padding([0, 4])
                                     .width(Length::Fixed(16.0)),
-                                    // Terminal name
-                                    button(
-                                        container(
-                                            text(&terminal.name).size(12).wrapping(Wrapping::None)
+                                    // Terminal name (with exit code badge if error)
+                                    {
+                                        let name_element = text(&terminal.name).size(12).wrapping(Wrapping::None);
+                                        let name_with_badge = if let TerminalStatus::Error(code) = app.get_terminal_status(&terminal_id) {
+                                            row![
+                                                container(name_element)
+                                                    .width(Length::Fill)
+                                                    .clip(true),
+                                                container(text(format!("{}", code)).size(9).color(rgb(220, 80, 80)))
+                                                    .padding([1, 4])
+                                                    .style(|_| ContainerStyle {
+                                                        background: Some(Background::Color(rgb(40, 30, 32))),
+                                                        border: Border {
+                                                            width: 1.0,
+                                                            color: rgb(70, 50, 54),
+                                                            radius: 8.0.into(),
+                                                        },
+                                                        ..Default::default()
+                                                    }),
+                                            ]
+                                            .spacing(4)
+                                            .width(Length::Fill)
+                                        } else {
+                                            row![container(name_element).width(Length::Fill).clip(true)]
+                                                .width(Length::Fill)
+                                        };
+                                        button(
+                                            container(name_with_badge)
+                                                .width(Length::Fill)
+                                                .clip(true)
                                         )
+                                        .padding([2, 4])
+                                        .style(move |_, status| {
+                                            terminal_button_style(status, terminal_active)
+                                        })
                                         .width(Length::Fill)
-                                        .clip(true)
-                                    )
-                                    .padding([2, 4])
-                                    .style(move |_, status| {
-                                        terminal_button_style(status, terminal_active)
-                                    })
-                                    .width(Length::Fill)
-                                    .on_press(
-                                        Message::SelectTerminal {
-                                            project_id: project_id.clone(),
-                                            terminal_id: terminal_id.clone(),
-                                        }
-                                    ),
+                                        .on_press(
+                                            Message::SelectTerminal {
+                                                project_id: project_id.clone(),
+                                                terminal_id: terminal_id.clone(),
+                                            }
+                                        )
+                                    },
                                     // Delete button
                                     button(text("×").size(12))
                                         .padding([0, 5])
@@ -830,6 +951,7 @@ fn chip_style() -> ContainerStyle {
     }
 }
 
+#[allow(dead_code)]
 fn count_badge_style() -> ContainerStyle {
     ContainerStyle {
         background: Some(Background::Color(rgb(28, 32, 40))),
@@ -1128,6 +1250,7 @@ fn tree_main_button_style(status: button::Status, active: bool) -> button::Style
     style
 }
 
+#[allow(dead_code)]
 fn action_button_style(status: button::Status) -> button::Style {
     let mut style = button::Style {
         background: Some(Background::Color(rgb(24, 28, 36))),
@@ -1158,6 +1281,7 @@ fn action_button_style(status: button::Status) -> button::Style {
     style
 }
 
+#[allow(dead_code)]
 fn delete_button_style(status: button::Status) -> button::Style {
     let mut style = button::Style {
         background: Some(Background::Color(rgb(22, 25, 33))),
@@ -1317,6 +1441,7 @@ fn terminal_left_border_style() -> ContainerStyle {
     }
 }
 
+#[allow(dead_code)]
 fn terminal_left_border_style_active(active: bool) -> ContainerStyle {
     ContainerStyle {
         background: Some(Background::Color(if active {

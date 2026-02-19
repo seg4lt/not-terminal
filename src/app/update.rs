@@ -175,6 +175,13 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 .active_ghostty_mut()
                 .is_some_and(|ghostty| ghostty.key_event_is_binding(&event));
             if ghostty_claims_binding {
+                // Get terminal ID before mutable borrow (clone to avoid borrow issues)
+                let active_terminal_id = app.active_terminal_id();
+                let terminal_id_clone = active_terminal_id.as_ref().cloned();
+                // Clear awaiting response state BEFORE the mutable borrow
+                if let Some(ref terminal_id) = terminal_id_clone {
+                    app.clear_awaiting_on_activity(terminal_id);
+                }
                 let mut should_refresh_branch = false;
                 if let Some(ghostty) = app.active_ghostty_mut()
                     && ghostty.handle_keyboard_event(&event)
@@ -197,6 +204,13 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
 
             let mut should_refresh_branch = false;
+            // Get terminal ID before mutable borrow (clone to avoid borrow issues)
+            let active_terminal_id = app.active_terminal_id();
+            let terminal_id_clone = active_terminal_id.as_ref().cloned();
+            // Clear awaiting response state BEFORE the mutable borrow
+            if let Some(ref terminal_id) = terminal_id_clone {
+                app.clear_awaiting_on_activity(terminal_id);
+            }
             if let Some(ghostty) = app.active_ghostty_mut()
                 && ghostty.handle_keyboard_event(&event)
             {

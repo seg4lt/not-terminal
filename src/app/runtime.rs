@@ -91,23 +91,11 @@ impl RuntimeSession {
             pane.ghostty.tick_if_needed();
         }
 
-        let exited: Vec<String> = self
-            .panes
-            .iter()
-            .filter(|(_, pane)| pane.ghostty.process_exited())
-            .map(|(pane_id, _)| pane_id.clone())
-            .collect();
+        // NOTE: We no longer auto-remove exited panes here.
+        // Instead, the CommandFinished action from Ghostty will set the terminal status,
+        // and users can manually close with Cmd+W or the × button.
 
-        let mut changed = false;
-        for pane_id in exited {
-            changed |= self.remove_pane(&pane_id);
-        }
-
-        if changed {
-            self.clear_active_input_modes();
-        }
-
-        changed || had_pending_work
+        had_pending_work
     }
 
     pub(crate) fn drain_actions(&mut self) -> Vec<GhosttyRuntimeAction> {
@@ -440,7 +428,7 @@ impl RuntimeSession {
         true
     }
 
-    fn pane_id_for_surface(&self, surface_ptr: usize) -> Option<String> {
+    pub(crate) fn pane_id_for_surface(&self, surface_ptr: usize) -> Option<String> {
         if surface_ptr == 0 {
             return None;
         }
@@ -451,6 +439,7 @@ impl RuntimeSession {
             .map(|pane| pane.id.clone())
     }
 
+    #[allow(dead_code)]
     fn remove_pane(&mut self, pane_id: &str) -> bool {
         if !self.panes.contains_key(pane_id) || self.panes.len() <= 1 {
             return false;
@@ -481,6 +470,7 @@ impl RuntimeSession {
         true
     }
 
+    #[allow(dead_code)]
     fn clear_active_input_modes(&mut self) {
         let Some(active) = self.active_ghostty_mut() else {
             return;
@@ -695,6 +685,7 @@ fn equalize_node(node: &mut SplitNode) {
     }
 }
 
+#[allow(dead_code)]
 fn remove_leaf_from_tree(node: &SplitNode, target: &str) -> (Option<SplitNode>, bool) {
     match node {
         SplitNode::Leaf(id) => {

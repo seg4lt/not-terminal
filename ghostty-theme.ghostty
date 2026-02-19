@@ -21,3 +21,4 @@ cursor-text = #1a1b26
 selection-background = #283457
 selection-foreground = #c0caf5
 term = xterm-256color
+bell-features = title

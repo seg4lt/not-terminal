@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
 #include <pthread.h>
 
 #import <AppKit/AppKit.h>
@@ -20,6 +21,10 @@ typedef enum rust_ghostty_action_tag_e {
   RUST_GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM = 5,
   RUST_GHOSTTY_ACTION_NEW_TAB = 6,
   RUST_GHOSTTY_ACTION_GOTO_TAB = 7,
+  RUST_GHOSTTY_ACTION_COMMAND_FINISHED = 8,
+  RUST_GHOSTTY_ACTION_RING_BELL = 9,
+  RUST_GHOSTTY_ACTION_SET_TITLE = 10,
+  RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION = 11,
 } rust_ghostty_action_tag_t;
 
 typedef struct rust_ghostty_action_event_s {
@@ -28,6 +33,8 @@ typedef struct rust_ghostty_action_event_s {
   int32_t arg0;
   uint16_t amount;
   uint16_t reserved;
+  uintptr_t ptr;  // For passing pointers (e.g., title strings)
+  char title_copy[256];  // Buffer to copy title strings immediately
 } rust_ghostty_action_event_t;
 
 typedef struct rust_ghostty_runtime_state_s {
@@ -128,6 +135,31 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
       action_event.tag = RUST_GHOSTTY_ACTION_GOTO_TAB;
       action_event.arg0 = (int32_t)action.action.goto_tab;
       break;
+    case GHOSTTY_ACTION_COMMAND_FINISHED:
+      action_event.tag = RUST_GHOSTTY_ACTION_COMMAND_FINISHED;
+      action_event.arg0 = (int32_t)action.action.command_finished.exit_code;
+      break;
+    case GHOSTTY_ACTION_RING_BELL:
+      action_event.tag = RUST_GHOSTTY_ACTION_RING_BELL;
+      break;
+    case GHOSTTY_ACTION_SET_TITLE: {
+      action_event.tag = RUST_GHOSTTY_ACTION_SET_TITLE;
+      // Copy the title string immediately - the original pointer may be freed
+      const char *title = action.action.set_title.title;
+      if (title != NULL) {
+        strncpy(action_event.title_copy, title, sizeof(action_event.title_copy) - 1);
+        action_event.title_copy[sizeof(action_event.title_copy) - 1] = '\0';
+        action_event.ptr = (uintptr_t)action_event.title_copy;
+      } else {
+        action_event.title_copy[0] = '\0';
+        action_event.ptr = 0;
+      }
+      break;
+    }
+    case GHOSTTY_ACTION_DESKTOP_NOTIFICATION: {
+      action_event.tag = RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION;
+      break;
+    }
     default:
       return false;
   }

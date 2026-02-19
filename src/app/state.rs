@@ -17,6 +17,19 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Represents the current status of a terminal
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalStatus {
+    /// Process is still running
+    Running,
+    /// Process exited successfully (exit code 0)
+    Success,
+    /// Process exited with an error (non-zero exit code)
+    Error(i16),
+    /// AI or tool is waiting for user input (bell was rung)
+    AwaitingResponse,
+}
+
 pub(crate) const SIDEBAR_WIDTH_MIN: f32 = 150.0;
 pub(crate) const SIDEBAR_WIDTH_MAX: f32 = 500.0;
 pub(crate) const SIDEBAR_WIDTH_DEFAULT: f32 = 248.0;
@@ -42,6 +55,7 @@ impl SidebarState {
         matches!(self, Self::Hidden)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_expanded(&self) -> bool {
         matches!(self, Self::Expanded)
     }
@@ -138,6 +152,12 @@ pub(crate) struct App {
     pub(crate) last_branch_refresh_at: Option<Instant>,
     pub(crate) last_ghostty_activity: Instant,
     pub(crate) frame_counter: u64,
+    /// Tracks exit status of terminals by ID
+    pub(crate) terminal_status: HashMap<String, TerminalStatus>,
+    /// Terminals that have rung the bell (awaiting user input)
+    pub(crate) terminal_awaiting_response: HashSet<String>,
+    /// Stores title per terminal_id for bell detection via title emoji
+    pub(crate) terminal_titles: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -244,6 +264,9 @@ impl App {
             last_branch_refresh_at: None,
             last_ghostty_activity: Instant::now(),
             frame_counter: 0,
+            terminal_status: HashMap::new(),
+            terminal_awaiting_response: HashSet::new(),
+            terminal_titles: HashMap::new(),
         };
 
         (
@@ -877,6 +900,37 @@ impl App {
                             String::from("Ghostty tab actions are not supported in this app yet");
                         false
                     }
+                    GhosttyRuntimeAction::CommandFinished { exit_code, .. } => {
+                        // Set the terminal status based on exit code
+                        // BUT don't override AwaitingResponse state - bell takes precedence
+                        let current_status = self.get_terminal_status(&terminal_id);
+                        if !matches!(current_status, TerminalStatus::AwaitingResponse) {
+                            let status = if exit_code == 0 {
+                                TerminalStatus::Success
+                            } else {
+                                TerminalStatus::Error(exit_code)
+                            };
+                            self.set_terminal_status(terminal_id.clone(), status);
+                        }
+                        // Note: We DON'T clear awaiting state here - only keyboard input should clear it
+                        true  // Trigger UI update
+                    }
+                    GhosttyRuntimeAction::RingBell { .. } => {
+                        // Mark terminal as awaiting response
+                        self.on_terminal_bell(terminal_id.clone());
+                        true  // Trigger UI update
+                    }
+                    GhosttyRuntimeAction::SetTitle { surface_ptr, title } => {
+                        // Handle title change - check for bell emoji
+                        self.on_terminal_title(surface_ptr, title);
+                        true  // Trigger UI update
+                    }
+                    GhosttyRuntimeAction::DesktopNotification { .. } => {
+                        // Desktop notification means the terminal needs attention
+                        // Mark as awaiting response
+                        self.on_terminal_bell(terminal_id.clone());
+                        true  // Trigger UI update
+                    }
                 };
 
                 changed = changed || action_changed;
@@ -889,6 +943,7 @@ impl App {
     pub(crate) fn remove_runtime(&mut self, terminal_id: &str) {
         self.runtimes.remove(terminal_id);
         self.branch_by_terminal.remove(terminal_id);
+        self.remove_terminal_status(terminal_id);
     }
 
     pub(crate) fn modal_open(&self) -> bool {
@@ -1228,6 +1283,11 @@ impl App {
             }
         }
 
+        // Initialize terminal status after the loop to avoid borrow issues
+        if let Some(ref terminal_id) = created {
+            self.set_terminal_status(terminal_id.clone(), TerminalStatus::Running);
+        }
+
         self.normalize_selection();
         created
     }
@@ -1241,6 +1301,8 @@ impl App {
             manual_name: false,
         });
         self.persisted.selected_detached_terminal_id = Some(terminal_id.clone());
+        // Initialize terminal status as Running
+        self.set_terminal_status(terminal_id.clone(), TerminalStatus::Running);
         self.normalize_selection();
         terminal_id
     }
@@ -1542,6 +1604,69 @@ impl App {
                 .detached_terminals
                 .iter()
                 .any(|terminal| terminal.id == terminal_id)
+    }
+
+    /// Get the current status of a terminal
+    pub(crate) fn get_terminal_status(&self, terminal_id: &str) -> TerminalStatus {
+        self.terminal_status
+            .get(terminal_id)
+            .cloned()
+            .unwrap_or(TerminalStatus::Running)
+    }
+
+    /// Set the status of a terminal
+    pub(crate) fn set_terminal_status(&mut self, terminal_id: String, status: TerminalStatus) {
+        self.terminal_status.insert(terminal_id, status);
+    }
+
+    /// Mark a terminal as awaiting response (bell was rung)
+    pub(crate) fn on_terminal_bell(&mut self, terminal_id: String) {
+        self.terminal_awaiting_response.insert(terminal_id.clone());
+        self.terminal_status.insert(terminal_id, TerminalStatus::AwaitingResponse);
+    }
+
+    /// Clear awaiting response state when user provides input
+    pub(crate) fn clear_awaiting_on_activity(&mut self, terminal_id: &str) {
+        self.terminal_awaiting_response.remove(terminal_id);
+        // If the terminal was in AwaitingResponse state, change it back to Running
+        if self.terminal_status.get(terminal_id) == Some(&TerminalStatus::AwaitingResponse) {
+            self.terminal_status.insert(terminal_id.to_string(), TerminalStatus::Running);
+        }
+    }
+
+    /// Check if a terminal is awaiting response
+    pub(crate) fn is_awaiting_response(&self, terminal_id: &str) -> bool {
+        self.terminal_awaiting_response.contains(terminal_id)
+    }
+
+    /// Clean up status when terminal is removed
+    pub(crate) fn remove_terminal_status(&mut self, terminal_id: &str) {
+        self.terminal_status.remove(terminal_id);
+        self.terminal_awaiting_response.remove(terminal_id);
+        self.terminal_titles.remove(terminal_id);
+    }
+
+    /// Handle title change from Ghostty, checking for bell emoji
+    pub(crate) fn on_terminal_title(&mut self, surface_ptr: usize, title: String) {
+        // Find which terminal owns this surface by searching all runtimes
+        let terminal_id = self.runtimes
+            .iter()
+            .find(|(_, runtime)| runtime.pane_id_for_surface(surface_ptr).is_some())
+            .map(|(tid, _)| tid.clone());
+
+        let terminal_id = match terminal_id {
+            Some(tid) => tid,
+            None => return,
+        };
+
+        // Check if title contains bell emoji - set awaiting state if so
+        // Note: We DON'T clear the state when emoji is removed - only keyboard input should clear it
+        if title.contains('🔔') {
+            self.on_terminal_bell(terminal_id.clone());
+        }
+
+        // Store title for future reference
+        self.terminal_titles.insert(terminal_id, title);
     }
 }
 
