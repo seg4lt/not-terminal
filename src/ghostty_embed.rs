@@ -196,6 +196,7 @@ mod macos {
         fn rust_ghostty_runtime_bundle_free(bundle: *mut RuntimeBundle);
         fn rust_ghostty_runtime_config_ptr(bundle: *const RuntimeBundle) -> *const c_void;
         fn rust_ghostty_runtime_take_pending_tick(bundle: *const RuntimeBundle) -> bool;
+        fn rust_ghostty_runtime_has_pending_tick(bundle: *const RuntimeBundle) -> bool;
         fn rust_ghostty_runtime_take_pending_action(
             bundle: *const RuntimeBundle,
             out_action: *mut RuntimeQueuedAction,
@@ -372,6 +373,10 @@ mod macos {
                     ghostty_app_tick(self.app);
                 }
             }
+        }
+
+        pub fn has_pending_tick(&self) -> bool {
+            unsafe { rust_ghostty_runtime_has_pending_tick(self.runtime_bundle) }
         }
 
         pub fn force_tick(&mut self) {

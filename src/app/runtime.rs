@@ -82,12 +82,12 @@ impl RuntimeSession {
             .map(|pane| &mut pane.ghostty)
     }
 
-    pub(crate) fn panes_mut(&mut self) -> impl Iterator<Item = &mut PaneRuntime> {
-        self.panes.values_mut()
-    }
-
     pub(crate) fn tick_all(&mut self) -> bool {
+        let mut had_pending_work = false;
         for pane in self.panes.values_mut() {
+            if pane.ghostty.has_pending_tick() {
+                had_pending_work = true;
+            }
             pane.ghostty.tick_if_needed();
         }
 
@@ -107,7 +107,7 @@ impl RuntimeSession {
             self.clear_active_input_modes();
         }
 
-        changed
+        changed || had_pending_work
     }
 
     pub(crate) fn drain_actions(&mut self) -> Vec<GhosttyRuntimeAction> {

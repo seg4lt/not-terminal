@@ -2,6 +2,7 @@ use super::shortcuts::{ShortcutAction, detect_shortcut};
 use super::state::{App, Message};
 use crate::ghostty_embed::disable_system_hide_shortcuts;
 use iced::{Task, keyboard, mouse, widget::operation, window};
+use std::time::{Duration, Instant};
 
 pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
     match message {
@@ -74,16 +75,46 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::GhosttyTick => {
-            let mut layout_changed = false;
-            for runtime in app.runtimes.values_mut() {
-                layout_changed |= runtime.tick_all();
+            app.frame_counter = app.frame_counter.wrapping_add(1);
+
+            // Adaptive polling: skip work based on idle time to reduce CPU usage
+            let time_since_activity = app.last_ghostty_activity.elapsed();
+            let skip_frames = if time_since_activity > Duration::from_secs(30) {
+                30 // 2Hz (60fps / 30 = 2fps) when idle for 30s
+            } else if time_since_activity > Duration::from_secs(5) {
+                10 // 6Hz when idle for 5s
+            } else if time_since_activity > Duration::from_secs(1) {
+                2 // 30Hz when idle for 1s
+            } else {
+                0 // 60Hz when active (no skipping)
+            };
+
+            // Only process ticks on the frames we didn't skip
+            if app.frame_counter % (skip_frames + 1) == 0 {
+                let mut layout_changed = false;
+                let mut had_any_work = false;
+
+                for runtime in app.runtimes.values_mut() {
+                    had_any_work |= runtime.tick_all();
+                    layout_changed |= had_any_work;
+                }
+
+                if app.process_runtime_actions() || layout_changed {
+                    app.sync_runtime_views();
+                }
+
+                // Update activity timestamp if there was actual work to do
+                if had_any_work {
+                    app.last_ghostty_activity = Instant::now();
+                }
             }
-            if app.process_runtime_actions() || layout_changed {
-                app.sync_runtime_views();
-            }
+
             Task::none()
         }
         Message::Keyboard(event) => {
+            // Mark activity on keyboard input
+            app.last_ghostty_activity = Instant::now();
+
             if let keyboard::Event::ModifiersChanged(modifiers) = &event {
                 app.keyboard_modifiers = *modifiers;
             }
@@ -183,6 +214,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Mouse(event) => {
+            // Mark activity on mouse input (but not cursor movement)
+            if !matches!(event, mouse::Event::CursorMoved { .. }) {
+                app.last_ghostty_activity = Instant::now();
+            }
+
             if app.modal_open() {
                 return Task::none();
             }
@@ -269,7 +305,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
         }
         Message::ToggleSidebar => {
-            app.sidebar_collapsed = !app.sidebar_collapsed;
+            app.sidebar_state = app.sidebar_state.toggle();
             app.sync_runtime_views();
             app.save_task()
         }

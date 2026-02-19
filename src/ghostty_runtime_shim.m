@@ -281,6 +281,15 @@ bool rust_ghostty_runtime_take_pending_tick(
       memory_order_acq_rel);
 }
 
+bool rust_ghostty_runtime_has_pending_tick(
+    const rust_ghostty_runtime_bundle_t *bundle) {
+  if (bundle == NULL || bundle->state == NULL) {
+    return false;
+  }
+
+  return atomic_load_explicit(&bundle->state->pending_tick, memory_order_acquire);
+}
+
 bool rust_ghostty_runtime_take_pending_action(
     const rust_ghostty_runtime_bundle_t *bundle,
     rust_ghostty_action_event_t *out_action_event) {

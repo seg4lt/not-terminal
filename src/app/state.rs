@@ -18,7 +18,55 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 pub(crate) const SIDEBAR_WIDTH_EXPANDED: f32 = 248.0;
+pub(crate) const SIDEBAR_WIDTH_COMPACT: f32 = 52.0;
 const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
+
+/// Represents the different states of the sidebar
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SidebarState {
+    /// Sidebar is completely hidden
+    Hidden,
+    /// Sidebar shows only icon chips and status indicators (compact mode)
+    Compact,
+    /// Sidebar shows full details (expanded mode)
+    Expanded,
+}
+
+impl Default for SidebarState {
+    fn default() -> Self {
+        Self::Expanded
+    }
+}
+
+impl SidebarState {
+    pub(crate) fn is_hidden(&self) -> bool {
+        matches!(self, Self::Hidden)
+    }
+
+    pub(crate) fn is_compact(&self) -> bool {
+        matches!(self, Self::Compact)
+    }
+
+    pub(crate) fn is_expanded(&self) -> bool {
+        matches!(self, Self::Expanded)
+    }
+
+    pub(crate) fn width(&self) -> f32 {
+        match self {
+            Self::Hidden => 0.0,
+            Self::Compact => SIDEBAR_WIDTH_COMPACT,
+            Self::Expanded => SIDEBAR_WIDTH_EXPANDED,
+        }
+    }
+
+    pub(crate) fn toggle(&self) -> Self {
+        match self {
+            Self::Hidden => Self::Compact,
+            Self::Compact => Self::Expanded,
+            Self::Expanded => Self::Hidden,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum RenameTarget {
@@ -88,7 +136,7 @@ pub(crate) struct App {
     pub(crate) persisted: PersistedState,
     pub(crate) status: String,
     pub(crate) filter_query: String,
-    pub(crate) sidebar_collapsed: bool,
+    pub(crate) sidebar_state: SidebarState,
     pub(crate) show_native_title_bar: bool,
     pub(crate) preferences_open: bool,
     pub(crate) quick_open_open: bool,
@@ -100,6 +148,8 @@ pub(crate) struct App {
     pub(crate) branch_by_terminal: HashMap<String, String>,
     pub(crate) last_branch_refresh_terminal_id: Option<String>,
     pub(crate) last_branch_refresh_at: Option<Instant>,
+    pub(crate) last_ghostty_activity: Instant,
+    pub(crate) frame_counter: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -188,7 +238,7 @@ impl App {
             persisted: PersistedState::default(),
             status: String::from("Ready"),
             filter_query: String::new(),
-            sidebar_collapsed: false,
+            sidebar_state: SidebarState::Expanded,
             show_native_title_bar: crate::app::initial_show_native_title_bar(),
             preferences_open: false,
             quick_open_open: false,
@@ -200,6 +250,8 @@ impl App {
             branch_by_terminal: HashMap::new(),
             last_branch_refresh_terminal_id: None,
             last_branch_refresh_at: None,
+            last_ghostty_activity: Instant::now(),
+            frame_counter: 0,
         };
 
         (
@@ -226,6 +278,8 @@ impl App {
         ];
 
         if !self.runtimes.is_empty() {
+            // Still use window::frames for the tick, but we'll skip work adaptively
+            // based on last_ghostty_activity in the tick handler
             subscriptions.push(window::frames().map(|_| Message::GhosttyTick));
         }
 
@@ -242,7 +296,12 @@ impl App {
 
     pub(crate) fn apply_loaded_state(&mut self, loaded: PersistedState) {
         self.persisted = loaded;
-        self.sidebar_collapsed = self.persisted.ui.sidebar_collapsed;
+        // Convert old boolean state to new enum state
+        self.sidebar_state = if self.persisted.ui.sidebar_collapsed {
+            SidebarState::Hidden
+        } else {
+            SidebarState::Expanded
+        };
         self.show_native_title_bar = self.persisted.ui.show_native_title_bar;
         self.filter_query.clear();
         self.normalize_selection();
@@ -250,8 +309,9 @@ impl App {
 
     pub(crate) fn save_task(&self) -> Task<Message> {
         let mut snapshot = self.persisted.clone();
+        // Convert new enum state to old boolean for persistence
         snapshot.ui = UiState {
-            sidebar_collapsed: self.sidebar_collapsed,
+            sidebar_collapsed: self.sidebar_state.is_hidden(),
             show_native_title_bar: self.show_native_title_bar,
         };
 
@@ -269,13 +329,9 @@ impl App {
     }
 
     pub(crate) fn sidebar_width_logical(&self) -> f32 {
-        if self.sidebar_collapsed {
-            0.0
-        } else {
-            SIDEBAR_WIDTH_EXPANDED
-                .max(0.0)
-                .min(self.window_size.width.max(1.0) - 1.0)
-        }
+        self.sidebar_state.width()
+            .max(0.0)
+            .min(self.window_size.width.max(1.0) - 1.0)
     }
 
     pub(crate) fn terminal_frame_logical(&self) -> (f32, f32, f32, f32) {
