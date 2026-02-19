@@ -125,6 +125,12 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                         | ShortcutAction::NewDetachedTerminal
                         | ShortcutAction::CloseActiveTerminal
                         | ShortcutAction::OpenQuickOpen
+                        | ShortcutAction::OpenPreferences
+                        | ShortcutAction::RenameTerminal
+                        | ShortcutAction::RenameFocused
+                        | ShortcutAction::FontIncrease
+                        | ShortcutAction::FontDecrease
+                        | ShortcutAction::FontReset
                         | ShortcutAction::NextTerminal
                         | ShortcutAction::PreviousTerminal
                 )
