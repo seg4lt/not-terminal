@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::git_branch::resolve_branch;
 
 impl App {
     pub(crate) fn add_project_from_git_folder(&mut self, git_folder: &str) -> Result<(), String> {
@@ -29,9 +30,35 @@ impl App {
         }
 
         self.persisted.projects.push(project);
-        self.persisted.active_project_id = Some(project_id);
+        self.persisted.active_project_id = Some(project_id.clone());
+
+        // Proactively resolve branches and update worktree names
+        self.resolve_and_update_worktree_branches(&project_id);
+
         self.normalize_selection();
         Ok(())
+    }
+
+    fn resolve_and_update_worktree_branches(&mut self, project_id: &str) {
+        let project_idx = if let Some(idx) = self
+            .persisted
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+        {
+            idx
+        } else {
+            return;
+        };
+
+        for worktree in &mut self.persisted.projects[project_idx].worktrees {
+            if let Some(branch) = resolve_branch(&worktree.path) {
+                // Update worktree name to branch name, unless it was manually renamed
+                if !worktree.manual_name {
+                    worktree.name = branch;
+                }
+            }
+        }
     }
 
     pub(crate) fn rescan_project(&mut self, project_id: &str) -> Result<(), String> {
@@ -117,6 +144,9 @@ impl App {
         for terminal_id in removed_terminal_ids {
             self.remove_runtime(&terminal_id);
         }
+
+        // Update branch names for all worktrees after rescan
+        self.resolve_and_update_worktree_branches(project_id);
 
         self.normalize_selection();
         Ok(())

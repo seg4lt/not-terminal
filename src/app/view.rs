@@ -518,19 +518,14 @@ fn chevron_button_style(status: button::Status) -> button::Style {
 }
 
 fn tree_main_button_style(status: button::Status, active: bool) -> button::Style {
-    let base_bg = if active {
-        rgb(58, 72, 102)
-    } else {
-        Color::TRANSPARENT
-    };
     let base_fg = if active {
         rgb(242, 244, 250)
     } else {
-        rgb(215, 220, 228)
+        rgb(200, 205, 215)
     };
 
     let mut style = button::Style {
-        background: Some(Background::Color(base_bg)),
+        background: Some(Background::Color(Color::TRANSPARENT)),
         text_color: base_fg,
         border: Border {
             width: 0.0,
@@ -542,19 +537,11 @@ fn tree_main_button_style(status: button::Status, active: bool) -> button::Style
 
     match status {
         button::Status::Hovered => {
-            if !active {
-                style.background = Some(Background::Color(rgb(28, 33, 44)));
-                style.text_color = rgb(225, 230, 238);
-            } else {
-                style.background = Some(Background::Color(rgb(68, 82, 115)));
-            }
+            style.background = Some(Background::Color(rgb(28, 33, 44)));
+            style.text_color = rgb(225, 230, 238);
         }
         button::Status::Pressed => {
-            if !active {
-                style.background = Some(Background::Color(rgb(24, 28, 38)));
-            } else {
-                style.background = Some(Background::Color(rgb(52, 64, 92)));
-            }
+            style.background = Some(Background::Color(rgb(24, 28, 38)));
         }
         button::Status::Disabled => {
             style.text_color = rgb(115, 120, 130);
