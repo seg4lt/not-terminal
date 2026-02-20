@@ -212,6 +212,9 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 text("Cmd+Shift+[ or ]: Previous/Next terminal").size(12),
                 text("Cmd+R: Rename active terminal").size(12),
                 text("F2: Rename focused item").size(12),
+                text("E: Command mode").size(12),
+                text("Command mode: H/J/K/L to move between terminals").size(11),
+                text("Command mode: @ to jump to active terminal").size(11),
             ]
             .spacing(6),
         )
