@@ -1,5 +1,6 @@
 mod app;
 mod ghostty_embed;
+mod webview;
 
 use app::{App, update, view};
 

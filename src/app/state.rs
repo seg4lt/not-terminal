@@ -1,7 +1,7 @@
 use crate::app::git_worktrees::{add_worktree, remove_worktree, scan_worktrees};
 use crate::app::model::{
-    PersistedState, ProjectRecord, TerminalRecord, TreeStateRecord, UiState, WorktreeRecord,
-    create_id, infer_project_name, next_project_name, next_terminal_name,
+    BrowserRecord, PersistedState, ProjectRecord, TerminalRecord, TreeStateRecord, UiState, WorktreeRecord,
+    create_id, infer_project_name, next_browser_name, next_project_name, next_terminal_name,
 };
 use crate::app::persistence;
 use crate::app::runtime::{PaneRuntime, RuntimeSession};
@@ -9,6 +9,7 @@ use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyRuntimeAction, host_view_free, host_view_new,
     ns_view_ptr,
 };
+use crate::webview::WebView;
 use iced::{
     Point, Size, Subscription, Task, keyboard,
     window::{self},
@@ -158,6 +159,8 @@ pub(crate) struct App {
     pub(crate) terminal_awaiting_response: HashSet<String>,
     /// Stores title per terminal_id for bell detection via title emoji
     pub(crate) terminal_titles: HashMap<String, String>,
+    /// Browser webviews by ID
+    pub(crate) browser_webviews: HashMap<String, WebView>,
 }
 
 #[derive(Debug, Clone)]
@@ -226,13 +229,22 @@ pub(crate) enum Message {
         worktree_id: String,
     },
     SwitchTerminalByOffset(i32),
-        ActiveBranchResolved {
-            terminal_id: String,
-            branch: Option<String>,
-        },
-        SidebarResizeHandlePressed,
-        SidebarResizeHandleReleased,
-    }
+    ActiveBranchResolved {
+        terminal_id: String,
+        branch: Option<String>,
+    },
+    SidebarResizeHandlePressed,
+    SidebarResizeHandleReleased,
+    AddBrowser,
+    RemoveBrowser(String),
+    SelectBrowser(String),
+    BrowserUrlChanged(String),
+    BrowserNavigate,
+    BrowserBack,
+    BrowserForward,
+    BrowserReload,
+    BrowserDevTools,
+}
 
 impl App {
     pub(crate) fn boot() -> (Self, Task<Message>) {
@@ -267,6 +279,7 @@ impl App {
             terminal_status: HashMap::new(),
             terminal_awaiting_response: HashSet::new(),
             terminal_titles: HashMap::new(),
+            browser_webviews: HashMap::new(),
         };
 
         (
@@ -450,6 +463,21 @@ impl App {
             })
         {
             self.persisted.selected_detached_terminal_id = None;
+        }
+
+        if self
+            .persisted
+            .selected_browser_id
+            .as_ref()
+            .is_some_and(|selected| {
+                !self
+                    .persisted
+                    .browsers
+                    .iter()
+                    .any(|browser| &browser.id == selected)
+            })
+        {
+            self.persisted.selected_browser_id = None;
         }
 
         if self.persisted.projects.is_empty() {
@@ -792,10 +820,29 @@ impl App {
         let (x_logical, y_logical, width_logical, height_logical) = self.terminal_frame_logical();
         let scale = self.window_scale_factor.max(0.1) as f64;
         let active_terminal_id = self.active_terminal_id();
+        let active_browser_id = self.active_browser_id();
         let modal_open = self.modal_open();
+
+        // Sync browser webviews - only the active one is visible
+        let browser_toolbar_height = 32.0;
+        for (browser_id, webview) in &mut self.browser_webviews {
+            let is_active = active_browser_id.as_ref().is_some_and(|id| id == browser_id);
+            if is_active {
+                webview.set_frame(
+                    x_logical as f64,
+                    (y_logical + browser_toolbar_height) as f64,
+                    width_logical as f64,
+                    (height_logical - browser_toolbar_height) as f64,
+                );
+                webview.set_hidden(false);
+            } else {
+                webview.set_hidden(true);
+            }
+        }
 
         for (terminal_id, runtime) in &mut self.runtimes {
             let active = !modal_open
+                && active_browser_id.is_none()
                 && active_terminal_id
                     .as_ref()
                     .is_some_and(|id| id == terminal_id);
@@ -1378,6 +1425,65 @@ impl App {
 
         self.remove_runtime(terminal_id);
         self.normalize_selection();
+    }
+
+    pub(crate) fn add_browser(&mut self) -> String {
+        let browser_id = create_id("browser");
+        let browser_name = next_browser_name(&self.persisted.browsers);
+        self.persisted.browsers.push(BrowserRecord {
+            id: browser_id.clone(),
+            name: browser_name,
+            url: String::from("https://"),
+        });
+        self.persisted.selected_browser_id = Some(browser_id.clone());
+        self.normalize_selection();
+        browser_id
+    }
+
+    pub(crate) fn select_browser(&mut self, browser_id: &str) {
+        if self
+            .persisted
+            .browsers
+            .iter()
+            .any(|browser| browser.id == browser_id)
+        {
+            self.persisted.selected_browser_id = Some(browser_id.to_string());
+        }
+        self.normalize_selection();
+    }
+
+    pub(crate) fn remove_browser(&mut self, browser_id: &str) {
+        self.persisted
+            .browsers
+            .retain(|browser| browser.id != browser_id);
+
+        if self
+            .persisted
+            .selected_browser_id
+            .as_ref()
+            .is_some_and(|selected| selected == browser_id)
+        {
+            self.persisted.selected_browser_id = self
+                .persisted
+                .browsers
+                .first()
+                .map(|browser| browser.id.clone());
+        }
+
+        self.browser_webviews.remove(browser_id);
+        self.normalize_selection();
+    }
+
+    pub(crate) fn active_browser_id(&self) -> Option<String> {
+        self.persisted.selected_browser_id.clone()
+    }
+
+    pub(crate) fn active_browser(&self) -> Option<&BrowserRecord> {
+        let browser_id = self.active_browser_id()?;
+        self.persisted
+            .browsers
+            .iter()
+            .find(|browser| browser.id == browser_id)
     }
 
     pub(crate) fn close_active_terminal(&mut self) -> bool {

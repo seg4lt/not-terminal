@@ -13,6 +13,8 @@ pub(crate) struct PersistedState {
     pub(crate) projects: Vec<ProjectRecord>,
     pub(crate) detached_terminals: Vec<TerminalRecord>,
     pub(crate) selected_detached_terminal_id: Option<String>,
+    pub(crate) browsers: Vec<BrowserRecord>,
+    pub(crate) selected_browser_id: Option<String>,
     pub(crate) ui: UiState,
 }
 
@@ -24,6 +26,8 @@ impl Default for PersistedState {
             projects: Vec::new(),
             detached_terminals: Vec::new(),
             selected_detached_terminal_id: None,
+            browsers: Vec::new(),
+            selected_browser_id: None,
             ui: UiState::default(),
         }
     }
@@ -55,7 +59,7 @@ pub(crate) const fn default_sidebar_width() -> f32 {
 
 #[cfg(target_os = "macos")]
 pub(crate) const fn default_show_native_title_bar() -> bool {
-    false
+    true
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -91,6 +95,14 @@ pub(crate) struct TerminalRecord {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) manual_name: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct BrowserRecord {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -140,4 +152,8 @@ pub(crate) fn next_project_name(projects: &[ProjectRecord]) -> String {
 
 pub(crate) fn next_terminal_name(terminals: &[TerminalRecord]) -> String {
     format!("Terminal {}", terminals.len() + 1)
+}
+
+pub(crate) fn next_browser_name(browsers: &[BrowserRecord]) -> String {
+    format!("Browser {}", browsers.len() + 1)
 }

@@ -9,6 +9,8 @@ pub(crate) enum ShortcutAction {
     CloseActiveTerminal,
     OpenQuickOpen,
     OpenPreferences,
+    AddBrowser,
+    BrowserDevTools,
     RenameTerminal,
     RenameFocused,
     FontIncrease,
@@ -109,10 +111,6 @@ pub(crate) fn detect_shortcut(
         }
     }
 
-    if modifiers.alt() {
-        return None;
-    }
-
     if is_digit_one(key_char.as_deref(), physical_key) && !modifiers.shift() {
         return Some(ShortcutAction::ToggleSidebar);
     }
@@ -135,6 +133,19 @@ pub(crate) fn detect_shortcut(
 
     if is_comma(key_char.as_deref(), physical_key) && !modifiers.shift() {
         return Some(ShortcutAction::OpenPreferences);
+    }
+
+    if is_key_b(key_char.as_deref(), physical_key) && !modifiers.shift() && !modifiers.alt() {
+        return Some(ShortcutAction::AddBrowser);
+    }
+
+    // Cmd+Option+I for DevTools (check this before the generic alt check)
+    if is_key_i(key_char.as_deref(), physical_key) && !modifiers.shift() && modifiers.alt() {
+        return Some(ShortcutAction::BrowserDevTools);
+    }
+
+    if modifiers.alt() {
+        return None;
     }
 
     if is_digit_zero(key_char.as_deref(), physical_key) {
@@ -177,6 +188,14 @@ fn is_key_w(value: Option<&str>, physical: &Physical) -> bool {
 
 fn is_key_r(value: Option<&str>, physical: &Physical) -> bool {
     is_letter(value, "r") || matches!(physical, Physical::Code(Code::KeyR))
+}
+
+fn is_key_b(value: Option<&str>, physical: &Physical) -> bool {
+    is_letter(value, "b") || matches!(physical, Physical::Code(Code::KeyB))
+}
+
+fn is_key_i(value: Option<&str>, physical: &Physical) -> bool {
+    is_letter(value, "i") || matches!(physical, Physical::Code(Code::KeyI))
 }
 
 fn is_comma(value: Option<&str>, physical: &Physical) -> bool {

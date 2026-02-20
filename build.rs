@@ -4,6 +4,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/ghostty_runtime_shim.m");
+    println!("cargo:rerun-if-changed=src/webview_shim.m");
     println!("cargo:rerun-if-changed=vendor/ghostty/include/ghostty.h");
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -13,6 +14,7 @@ fn main() {
 
     cc::Build::new()
         .file("src/ghostty_runtime_shim.m")
+        .file("src/webview_shim.m")
         .include("vendor/ghostty/include")
         .flag_if_supported("-std=c11")
         .compile("ghostty_runtime_shim");
@@ -54,6 +56,7 @@ fn main() {
         "UniformTypeIdentifiers",
         "SystemConfiguration",
         "Security",
+        "WebKit",
     ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }

@@ -1,6 +1,7 @@
 use super::shortcuts::{ShortcutAction, detect_shortcut};
 use super::state::{App, Message};
 use crate::ghostty_embed::disable_system_hide_shortcuts;
+use crate::webview::WebView;
 use iced::{Task, keyboard, mouse, widget::operation, window};
 use std::time::{Duration, Instant};
 
@@ -157,6 +158,8 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                         | ShortcutAction::CloseActiveTerminal
                         | ShortcutAction::OpenQuickOpen
                         | ShortcutAction::OpenPreferences
+                        | ShortcutAction::AddBrowser
+                        | ShortcutAction::BrowserDevTools
                         | ShortcutAction::RenameTerminal
                         | ShortcutAction::RenameFocused
                         | ShortcutAction::FontIncrease
@@ -742,6 +745,99 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::AddBrowser => {
+            let browser_id = app.add_browser();
+            // Create webview for the new browser
+            if let Some(host_ns_view) = app.host_ns_view {
+                unsafe {
+                    if let Some(webview) = WebView::new(host_ns_view) {
+                        app.browser_webviews.insert(browser_id, webview);
+                    }
+                }
+            }
+            app.sync_runtime_views();
+            Task::none()
+        }
+        Message::RemoveBrowser(browser_id) => {
+            app.remove_browser(&browser_id);
+            app.sync_runtime_views();
+            app.save_task()
+        }
+        Message::SelectBrowser(browser_id) => {
+            app.select_browser(&browser_id);
+            // Ensure webview exists
+            if !app.browser_webviews.contains_key(&browser_id) {
+                if let Some(host_ns_view) = app.host_ns_view {
+                    unsafe {
+                        if let Some(webview) = WebView::new(host_ns_view) {
+                            app.browser_webviews.insert(browser_id.clone(), webview);
+                        }
+                    }
+                }
+            }
+            // Load URL if this is the first time selecting
+            if let Some(browser) = app.active_browser() {
+                if let Some(webview) = app.browser_webviews.get(&browser_id) {
+                    if !browser.url.is_empty() && browser.url != "https://" {
+                        webview.load_url(&browser.url);
+                    }
+                }
+            }
+            app.sync_runtime_views();
+            app.save_task()
+        }
+        Message::BrowserUrlChanged(value) => {
+            if let Some(browser_id) = app.active_browser_id() {
+                // Update URL in persisted state
+                if let Some(b) = app.persisted.browsers.iter_mut().find(|b| b.id == browser_id) {
+                    b.url = value;
+                }
+            }
+            Task::none()
+        }
+        Message::BrowserNavigate => {
+            if let Some(browser) = app.active_browser() {
+                let url = browser.url.trim().to_string();
+                if !url.is_empty() {
+                    if let Some(webview) = app.browser_webviews.get(&browser.id) {
+                        webview.load_url(&url);
+                    }
+                }
+            }
+            Task::none()
+        }
+        Message::BrowserBack => {
+            if let Some(browser) = app.active_browser() {
+                if let Some(webview) = app.browser_webviews.get(&browser.id) {
+                    webview.go_back();
+                }
+            }
+            Task::none()
+        }
+        Message::BrowserForward => {
+            if let Some(browser) = app.active_browser() {
+                if let Some(webview) = app.browser_webviews.get(&browser.id) {
+                    webview.go_forward();
+                }
+            }
+            Task::none()
+        }
+        Message::BrowserReload => {
+            if let Some(browser) = app.active_browser() {
+                if let Some(webview) = app.browser_webviews.get(&browser.id) {
+                    webview.reload();
+                }
+            }
+            Task::none()
+        }
+        Message::BrowserDevTools => {
+            if let Some(browser) = app.active_browser() {
+                if let Some(webview) = app.browser_webviews.get(&browser.id) {
+                    webview.open_dev_tools();
+                }
+            }
+            Task::none()
+        }
     }
 }
 
@@ -766,6 +862,8 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
         ShortcutAction::CloseActiveTerminal => update(app, Message::CloseActiveTerminal),
         ShortcutAction::OpenQuickOpen => update(app, Message::OpenQuickOpen(true)),
         ShortcutAction::OpenPreferences => update(app, Message::OpenPreferences(true)),
+        ShortcutAction::AddBrowser => update(app, Message::AddBrowser),
+        ShortcutAction::BrowserDevTools => update(app, Message::BrowserDevTools),
         ShortcutAction::RenameTerminal => update(app, Message::StartRenameTerminal),
         ShortcutAction::RenameFocused => update(app, Message::StartRenameFocused),
         ShortcutAction::FontIncrease => {

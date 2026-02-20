@@ -8,19 +8,25 @@ use iced::widget::{
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
 pub(crate) fn view(app: &App) -> Element<'_, Message> {
-    let terminal_area = container(text(""))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|_| surface_style());
+    // Show browser panel if there's an active browser, otherwise terminal area
+    let main_area = if app.active_browser().is_some() {
+        browser_panel_view(app)
+    } else {
+        container(text(""))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| surface_style())
+            .into()
+    };
 
     let content: Element<'_, Message> = if app.sidebar_state.is_hidden() {
-        container(terminal_area)
+        container(main_area)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
     } else {
         let sidebar = sidebar_view(app);
-        row![sidebar, terminal_area]
+        row![sidebar, main_area]
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -69,7 +75,7 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
             button(text("+").size(14))
                 .padding([0, 7])
                 .style(|_, status| toolbar_button_style(status))
-                .on_press(Message::AddProject),
+                .on_press(Message::AddDetachedTerminal),
             button(text("⚙").size(12))
                 .padding([0, 7])
                 .style(|_, status| toolbar_button_style(status))
@@ -88,7 +94,9 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
         );
     }
 
-    let context_label = if let Some(context) = app.active_terminal_context() {
+    let context_label = if let Some(browser) = app.active_browser() {
+        format!("🌐 {}", &browser.name)
+    } else if let Some(context) = app.active_terminal_context() {
         let breadcrumb = format!(
             "{} / {} / {}",
             &context.project_name, &context.worktree_name, &context.terminal_name
@@ -109,7 +117,7 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
                 button(text("+").size(13))
                     .padding([0, 6])
                     .style(|_, status| toolbar_button_style(status))
-                    .on_press(Message::AddProject),
+                    .on_press(Message::AddDetachedTerminal),
             ]
             .spacing(6)
             .align_y(Alignment::Center),
@@ -323,14 +331,135 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
 
     list = list.push(container(detached_column).style(|_| project_group_style()));
 
-    if project_indices.is_empty() {
-        list = list.push(
+    // Browsers section
+    let browser_active = app.active_browser_id().is_some();
+    let mut browser_column = iced::widget::column![container(
+        row![
+            button(browser_icon_chip())
+                .padding([0, 0])
+                .style(|_, status| tree_icon_button_style(status)),
+            text("Browsers")
+                .size(13)
+                .color(rgb(226, 229, 235))
+                .width(Length::Fill),
             container(
-                row![text("No projects yet").size(11).color(rgb(130, 135, 145)),]
-                    .align_y(Alignment::Center),
+                text(format!("{}", app.persisted.browsers.len()))
+                    .size(10)
+                    .color(rgb(145, 150, 160))
             )
-            .padding([12, 12])
-            .style(|_| empty_state_style()),
+            .padding([3, 6])
+            .style(|_| subtle_badge_style()),
+            button(text("+").size(12))
+                .padding([0, 5])
+                .style(|_, status| subtle_action_button_style(status))
+                .on_press(Message::AddBrowser),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding([8, 10])
+    .style(move |_| project_header_style(browser_active))]
+    .spacing(0);
+
+    if app.persisted.browsers.is_empty() {
+        browser_column = browser_column.push(
+            container(
+                text("No browsers").size(11).color(rgb(130, 135, 145)),
+            )
+            .padding([12, 16]),
+        );
+    } else {
+        for browser in &app.persisted.browsers {
+            let browser_id = browser.id.clone();
+            let browser_id_for_action = browser_id.clone();
+            let is_active = app.active_browser_id()
+                .as_ref()
+                .is_some_and(|id| id == &browser_id);
+
+            browser_column = browser_column.push(
+                container(
+                    row![
+                        // Left border with blue color to indicate browser
+                        container("")
+                            .width(Length::Fixed(2.0))
+                            .height(Length::Fill)
+                            .style(move |_| ContainerStyle {
+                                background: Some(Background::Color(if is_active {
+                                    rgb(66, 165, 245)  // Blue for active browser
+                                } else {
+                                    rgb(45, 55, 72)  // Dark for inactive
+                                })),
+                                ..Default::default()
+                            }),
+                        // Globe icon for browser
+                        container(text("🌐").size(10).color(rgb(100, 180, 255)))
+                            .padding([0, 4])
+                            .width(Length::Fixed(16.0)),
+                        // Browser name
+                        button(
+                            container(text(&browser.name).size(12).wrapping(Wrapping::None))
+                                .width(Length::Fill)
+                                .clip(true)
+                        )
+                        .padding([2, 4])
+                        .style(move |_, status| terminal_button_style(status, is_active))
+                        .width(Length::Fill)
+                        .on_press(Message::SelectBrowser(browser_id.clone())),
+                        // Delete button
+                        button(text("×").size(12))
+                            .padding([0, 5])
+                            .style(|_, status| subtle_delete_button_style(status))
+                            .on_press(Message::RemoveBrowser(browser_id_for_action)),
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
+                )
+                .padding([4, 8])
+                .style(move |_| terminal_row_style(is_active)),
+            );
+        }
+    }
+
+    list = list.push(container(browser_column).style(|_| project_group_style()));
+
+    // Projects section
+    let projects_active = app.persisted.active_project_id.is_some();
+    let mut projects_column = iced::widget::column![container(
+        row![
+            button(project_icon_chip())
+                .padding([0, 0])
+                .style(|_, status| tree_icon_button_style(status)),
+            text("Projects")
+                .size(13)
+                .color(rgb(226, 229, 235))
+                .width(Length::Fill),
+            container(
+                text(format!("{}", app.persisted.projects.len()))
+                    .size(10)
+                    .color(rgb(145, 150, 160))
+            )
+            .padding([3, 6])
+            .style(|_| subtle_badge_style()),
+            button(text("+").size(12))
+                .padding([0, 5])
+                .style(|_, status| subtle_action_button_style(status))
+                .on_press(Message::AddProject),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    )
+    .padding([8, 10])
+    .style(move |_| project_header_style(projects_active))]
+    .spacing(0);
+
+    if project_indices.is_empty() {
+        projects_column = projects_column.push(
+            container(
+                text("No projects")
+                    .size(11)
+                    .color(rgb(130, 135, 145)),
+            )
+            .padding([12, 16]),
         );
     }
 
@@ -598,8 +727,10 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
             }
         }
 
-        list = list.push(container(project_column).style(|_| project_group_style()));
+        projects_column = projects_column.push(container(project_column).style(|_| project_group_style()));
     }
+
+    list = list.push(container(projects_column).style(|_| project_group_style()));
 
     list = list.push(
         container(
@@ -629,6 +760,92 @@ fn sidebar_view(app: &App) -> Element<'_, Message> {
 
     row![sidebar_content, resize_handle]
         .width(Length::Fixed(app.sidebar_width_logical()))
+        .height(Length::Fill)
+        .into()
+}
+
+fn browser_panel_view(app: &App) -> Element<'_, Message> {
+    let active_browser = match app.active_browser() {
+        Some(b) => b,
+        None => {
+            return container(text("No browser selected"))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        }
+    };
+
+    let browser_id = active_browser.id.clone();
+    let current_url = active_browser.url.clone();
+
+    let can_go_back = app.browser_webviews.get(&browser_id)
+        .is_some_and(|w| w.can_go_back());
+    let can_go_forward = app.browser_webviews.get(&browser_id)
+        .is_some_and(|w| w.can_go_forward());
+
+    let toolbar = row![
+        // Back button
+        button(text("◁").size(13))
+            .padding([0, 7])
+            .style(|_, status| toolbar_button_style(status))
+            .on_press_maybe(if can_go_back { Some(Message::BrowserBack) } else { None }),
+        // Forward button
+        button(text("▷").size(13))
+            .padding([0, 7])
+            .style(|_, status| toolbar_button_style(status))
+            .on_press_maybe(if can_go_forward { Some(Message::BrowserForward) } else { None }),
+        // Reload button
+        button(text("↻").size(13))
+            .padding([0, 7])
+            .style(|_, status| toolbar_button_style(status))
+            .on_press(Message::BrowserReload),
+        // DevTools button
+        button(text("⟲").size(13))
+            .padding([0, 7])
+            .style(|_, status| toolbar_button_style(status))
+            .on_press(Message::BrowserDevTools),
+        // URL input
+        text_input("Enter URL...", &current_url)
+            .id("browser-url-input")
+            .on_input(Message::BrowserUrlChanged)
+            .on_submit(Message::BrowserNavigate)
+            .padding(4)
+            .size(13)
+            .style(|_, status| input_style(status))
+            .width(Length::Fill),
+        // Go button
+        button(text("Go").size(12))
+            .padding([0, 8])
+            .style(|_, status| toolbar_button_style(status))
+            .on_press(Message::BrowserNavigate),
+        // Close button to return to terminal
+        button(text("×").size(14))
+            .padding([0, 7])
+            .style(|_, status| toolbar_button_style(status))
+            .on_press(Message::RemoveBrowser(browser_id.clone())),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center)
+    .width(Length::Fill);
+
+    let content = iced::widget::column![
+        // Toolbar at the top
+        container(toolbar)
+            .padding([4, 6])
+            .width(Length::Fill)
+            .height(Length::Fixed(32.0))
+            .style(|_| top_bar_context_style()),
+        // The webview area (actual webview is rendered natively)
+        container(text(""))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_| surface_style()),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill);
+
+    container(content)
+        .width(Length::Fill)
         .height(Length::Fill)
         .into()
 }
@@ -815,6 +1032,8 @@ fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 text("Cmd+Shift+T: New detached terminal").size(12),
                 text("Cmd+W: Close active terminal").size(12),
                 text("Cmd+P: Quick open").size(12),
+                text("Cmd+B: New browser").size(12),
+                text("Cmd+Option+I: Browser DevTools").size(12),
                 text("Cmd+, : Preferences").size(12),
                 text("Cmd+=/-/0: Font size").size(12),
                 text("Cmd+Shift+[ or ]: Previous/Next terminal").size(12),
@@ -851,6 +1070,20 @@ fn monogram_chip(name: &str) -> Element<'static, Message> {
 
 fn detached_icon_chip() -> Element<'static, Message> {
     container(text("⬚").size(12).color(rgb(185, 190, 200)))
+        .padding([2, 6])
+        .style(|_| chip_style())
+        .into()
+}
+
+fn browser_icon_chip() -> Element<'static, Message> {
+    container(text("🌐").size(11).color(rgb(100, 180, 255)))
+        .padding([2, 6])
+        .style(|_| chip_style())
+        .into()
+}
+
+fn project_icon_chip() -> Element<'static, Message> {
+    container(text("P").size(11).color(rgb(100, 165, 140)))
         .padding([2, 6])
         .style(|_| chip_style())
         .into()
