@@ -77,9 +77,9 @@ mod macos {
     use iced::keyboard::key::{Code, Named, NativeCode, Physical};
     use iced::keyboard::{Event as KeyboardEvent, Key, Location, Modifiers};
     use iced::mouse::Button as MouseButton;
-    use iced::window::raw_window_handle::RawWindowHandle;
     use iced::window::Window;
-    use std::ffi::{c_char, c_int, c_void, CString};
+    use iced::window::raw_window_handle::RawWindowHandle;
+    use std::ffi::{CString, c_char, c_int, c_void};
     use std::path::{Path, PathBuf};
     use std::ptr;
 
@@ -110,8 +110,8 @@ mod macos {
         arg0: i32,
         amount: u16,
         reserved: u16,
-        ptr: usize,  // For passing pointers (e.g., title strings)
-        title_copy: [u8; 256],  // Buffer containing the copied title string
+        ptr: usize,            // For passing pointers (e.g., title strings)
+        title_copy: [u8; 256], // Buffer containing the copied title string
     }
 
     impl Default for RuntimeQueuedAction {
@@ -1189,8 +1189,8 @@ mod macos {
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    disable_system_hide_shortcuts, host_view_free, host_view_new, host_view_set_frame,
-    host_view_set_hidden, ns_view_ptr, GhosttyEmbed,
+    GhosttyEmbed, disable_system_hide_shortcuts, host_view_free, host_view_new,
+    host_view_set_frame, host_view_set_hidden, ns_view_ptr,
 };
 
 #[cfg(not(target_os = "macos"))]
@@ -1232,7 +1232,6 @@ impl GhosttyEmbed {
     }
 
     pub fn update_modifiers(&mut self, _modifiers: iced::keyboard::Modifiers) {}
-
 }
 
 #[cfg(not(target_os = "macos"))]
