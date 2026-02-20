@@ -1,0 +1,216 @@
+use super::*;
+use crate::app::state::{App, Message};
+use iced::widget::{button, checkbox, container, row, scrollable, text, text_input};
+use iced::{Element, Length};
+
+pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
+    if app.quick_open_open {
+        let entries = app.quick_open_entries();
+        let mut list = iced::widget::column![
+            text_input("Search terminal", &app.quick_open_query)
+                .id("quick-open-input")
+                .on_input(Message::QuickOpenQueryChanged)
+                .on_submit(Message::QuickOpenSubmit)
+                .padding(6)
+                .size(14)
+                .style(|_, status| input_style(status))
+                .width(Length::Fill)
+        ]
+        .spacing(6)
+        .width(Length::Fill);
+
+        for (idx, entry) in entries.iter().take(24).enumerate() {
+            let is_selected = idx == app.quick_open_selected_index;
+            let style = if is_selected {
+                selected_entry_style
+            } else {
+                tree_icon_button_style
+            };
+            list = list.push(
+                button(
+                    text(format!(
+                        "{} / {} / {}",
+                        entry.project_name, entry.worktree_name, entry.terminal_name
+                    ))
+                    .size(13),
+                )
+                .width(Length::Fill)
+                .padding([4, 6])
+                .style(move |_, status| style(status))
+                .on_press(Message::QuickOpenSelect(entry.terminal_id.clone())),
+            );
+        }
+
+        if entries.is_empty() {
+            list = list.push(container(text("No matching terminals").size(12)).padding([4, 2]));
+        }
+
+        let panel = container(
+            iced::widget::column![
+                row![
+                    text("Quick Open").size(16),
+                    button(text("Close").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::OpenQuickOpen(false)),
+                ]
+                .spacing(8),
+                scrollable(list).height(Length::Fill),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fixed(560.0))
+        .height(Length::Fixed(420.0))
+        .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
+    if let Some(dialog) = &app.rename_dialog {
+        let title = match dialog.target {
+            crate::app::state::RenameTarget::Project { .. } => "Rename Project",
+            crate::app::state::RenameTarget::Worktree { .. } => "Rename Worktree",
+            crate::app::state::RenameTarget::Terminal { .. } => "Rename Terminal",
+            crate::app::state::RenameTarget::DetachedTerminal { .. } => "Rename Terminal",
+        };
+
+        let panel = container(
+            iced::widget::column![
+                text(title).size(16),
+                text_input("Name", &dialog.value)
+                    .id("rename-input")
+                    .on_input(Message::RenameValueChanged)
+                    .on_submit(Message::RenameCommit)
+                    .padding(6)
+                    .size(14)
+                    .style(|_, status| input_style(status))
+                    .width(Length::Fill),
+                row![
+                    button(text("Cancel").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::RenameCancel),
+                    button(text("Save").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::RenameCommit),
+                ]
+                .spacing(8),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fixed(420.0))
+        .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
+    if let Some(dialog) = &app.add_worktree_dialog {
+        let panel = container(
+            iced::widget::column![
+                text("Add Worktree").size(16),
+                text_input("Branch name", &dialog.branch_name)
+                    .id("add-worktree-branch-input")
+                    .on_input(Message::AddWorktreeBranchChanged)
+                    .on_submit(Message::FocusAddWorktreePath)
+                    .padding(6)
+                    .size(14)
+                    .style(|_, status| input_style(status))
+                    .width(Length::Fill),
+                text_input("Destination path", &dialog.destination_path)
+                    .id("add-worktree-path-input")
+                    .on_input(Message::AddWorktreePathChanged)
+                    .on_submit(Message::AddWorktreeCommit)
+                    .padding(6)
+                    .size(14)
+                    .style(|_, status| input_style(status))
+                    .width(Length::Fill),
+                row![
+                    button(text("Cancel").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::AddWorktreeCancel),
+                    button(text("Create").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::AddWorktreeCommit),
+                ]
+                .spacing(8),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fixed(520.0))
+        .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
+    if app.preferences_open {
+        let panel = container(
+            iced::widget::column![
+                row![
+                    text("Preferences").size(16),
+                    button(text("Close").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::OpenPreferences(false)),
+                ]
+                .spacing(8),
+                text("Shortcuts").size(14),
+                checkbox(app.show_native_title_bar)
+                    .label("Show native title bar")
+                    .on_toggle(Message::SetShowNativeTitleBar)
+                    .text_size(13),
+                text("Cmd+1: Toggle sidebar").size(12),
+                text("Cmd+T: New terminal in active worktree").size(12),
+                text("Cmd+Shift+T: New detached terminal").size(12),
+                text("Cmd+W: Close active terminal").size(12),
+                text("Cmd+P: Quick open").size(12),
+                text("Cmd+B: New browser").size(12),
+                text("Cmd+Option+I: Browser DevTools").size(12),
+                text("Cmd+, : Preferences").size(12),
+                text("Cmd+=/-/0: Font size").size(12),
+                text("Cmd+Shift+[ or ]: Previous/Next terminal").size(12),
+                text("Cmd+R: Rename active terminal").size(12),
+                text("F2: Rename focused item").size(12),
+            ]
+            .spacing(6),
+        )
+        .padding(12)
+        .width(Length::Fixed(460.0))
+        .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
+    None
+}

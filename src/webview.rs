@@ -31,6 +31,16 @@ unsafe impl Send for WebView {}
 unsafe impl Sync for WebView {}
 
 impl WebView {
+    /// Create a hosted webview from a raw NSView pointer from the app runtime.
+    pub fn new_hosted(parent_ns_view: usize) -> Option<Self> {
+        if parent_ns_view == 0 {
+            return None;
+        }
+
+        // SAFETY: `parent_ns_view` comes from AppKit window resolution and is validated non-zero above.
+        unsafe { Self::new(parent_ns_view) }
+    }
+
     /// Create a new webview hosted in the parent NSView
     ///
     /// # Safety
