@@ -35,6 +35,7 @@ This repository embeds Ghostty into an Iced app on macOS. Use this file as the d
 ## Ghostty FFI Research Playbook
 - C header is ABI source of truth:
   - `vendor/ghostty/include/ghostty.h`
+  - see GHOSTTY_INTEGRATION.md
 - For each C symbol, verify implementation in Zig:
   - `vendor/ghostty/src/apprt/embedded.zig`
 - For runtime behavior details (scrolling, focus, cursor semantics), verify surface callbacks:

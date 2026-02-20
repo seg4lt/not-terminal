@@ -21,7 +21,7 @@ enum SplitNode {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PaneRect {
     pub(crate) x: f32,
     pub(crate) y: f32,
@@ -29,10 +29,21 @@ pub(crate) struct PaneRect {
     pub(crate) height: f32,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TickOutcome {
+    pub(crate) had_pending_work: bool,
+    pub(crate) layout_changed: bool,
+}
+
 pub(crate) struct PaneRuntime {
     pub(crate) id: String,
     pub(crate) host_view: usize,
     pub(crate) ghostty: GhosttyEmbed,
+    last_frame: Option<(f64, f64, f64, f64)>,
+    last_size_px: Option<(u32, u32)>,
+    last_scale: Option<f64>,
+    last_focus: Option<bool>,
+    last_hidden: Option<bool>,
 }
 
 impl PaneRuntime {
@@ -41,6 +52,11 @@ impl PaneRuntime {
             id,
             host_view,
             ghostty,
+            last_frame: None,
+            last_size_px: None,
+            last_scale: None,
+            last_focus: None,
+            last_hidden: None,
         }
     }
 
@@ -82,7 +98,46 @@ impl RuntimeSession {
             .map(|pane| &mut pane.ghostty)
     }
 
-    pub(crate) fn tick_all(&mut self) -> bool {
+    pub(crate) fn tick_all(&mut self) -> TickOutcome {
+        // Fast path: check if ANY pane has pending work before iterating
+        // This avoids FFI calls when no terminal has data to process
+        let has_any_pending = self
+            .panes
+            .values()
+            .any(|pane| pane.ghostty.has_pending_tick());
+
+        if !has_any_pending {
+            // No pending work anywhere - still need to check for exited panes
+            let exited: Vec<String> = self
+                .panes
+                .iter()
+                .filter(|(_, pane)| pane.ghostty.process_exited())
+                .map(|(pane_id, _)| pane_id.clone())
+                .collect();
+
+            if exited.is_empty() {
+                // No pending work and no exited panes - early exit
+                return TickOutcome::default();
+            }
+
+            // Handle exited panes only
+            let mut changed = false;
+            for pane_id in exited {
+                if self.panes.len() > 1 {
+                    changed |= self.remove_pane(&pane_id);
+                }
+            }
+
+            if changed {
+                self.clear_active_input_modes();
+            }
+            return TickOutcome {
+                had_pending_work: false,
+                layout_changed: changed,
+            };
+        }
+
+        // At least one pane has pending work - process all panes
         let mut had_pending_work = false;
         for pane in self.panes.values_mut() {
             if pane.ghostty.has_pending_tick() {
@@ -111,7 +166,10 @@ impl RuntimeSession {
             self.clear_active_input_modes();
         }
 
-        changed || had_pending_work
+        TickOutcome {
+            had_pending_work,
+            layout_changed: changed,
+        }
     }
 
     pub(crate) fn drain_actions(&mut self) -> Vec<GhosttyRuntimeAction> {
@@ -133,8 +191,14 @@ impl RuntimeSession {
     ) {
         if !visible {
             for pane in self.panes.values_mut() {
-                host_view_set_hidden(pane.host_view, true);
-                pane.ghostty.set_focus(false);
+                if pane.last_hidden != Some(true) {
+                    host_view_set_hidden(pane.host_view, true);
+                    pane.last_hidden = Some(true);
+                }
+                if pane.last_focus != Some(false) {
+                    pane.ghostty.set_focus(false);
+                    pane.last_focus = Some(false);
+                }
             }
             return;
         }
@@ -147,28 +211,64 @@ impl RuntimeSession {
                 .find(|(id, _)| id == pane_id)
                 .map(|(_, rect)| *rect)
             else {
-                host_view_set_hidden(pane.host_view, true);
-                pane.ghostty.set_focus(false);
+                if pane.last_hidden != Some(true) {
+                    host_view_set_hidden(pane.host_view, true);
+                    pane.last_hidden = Some(true);
+                }
+                if pane.last_focus != Some(false) {
+                    pane.ghostty.set_focus(false);
+                    pane.last_focus = Some(false);
+                }
                 continue;
             };
 
-            host_view_set_frame(
-                pane.host_view,
+            let frame = (
                 (frame_x + rect.x) as f64,
                 (frame_y + rect.y) as f64,
                 rect.width.max(1.0) as f64,
                 rect.height.max(1.0) as f64,
             );
-            host_view_set_hidden(pane.host_view, false);
+            let frame_changed = pane.last_frame != Some(frame);
+            if frame_changed {
+                host_view_set_frame(pane.host_view, frame.0, frame.1, frame.2, frame.3);
+                pane.last_frame = Some(frame);
+            }
+
+            let hidden_changed = pane.last_hidden != Some(false);
+            if hidden_changed {
+                host_view_set_hidden(pane.host_view, false);
+                pane.last_hidden = Some(false);
+            }
 
             let width_px = (rect.width.max(1.0) as f64 * scale).round().max(1.0) as u32;
             let height_px = (rect.height.max(1.0) as f64 * scale).round().max(1.0) as u32;
-            pane.ghostty.set_scale_factor(scale);
-            pane.ghostty.set_size(width_px, height_px);
+            let scale_changed = pane.last_scale != Some(scale);
+            if scale_changed {
+                pane.ghostty.set_scale_factor(scale);
+                pane.last_scale = Some(scale);
+            }
+
+            let size = (width_px, height_px);
+            let size_changed = pane.last_size_px != Some(size);
+            if size_changed {
+                pane.ghostty.set_size(width_px, height_px);
+                pane.last_size_px = Some(size);
+            }
 
             let focused = pane_id == &self.active_pane_id;
-            pane.ghostty.set_focus(focused);
-            if focused {
+            let focus_changed = pane.last_focus != Some(focused);
+            if focus_changed {
+                pane.ghostty.set_focus(focused);
+                pane.last_focus = Some(focused);
+            }
+
+            if focused
+                && (frame_changed
+                    || hidden_changed
+                    || scale_changed
+                    || size_changed
+                    || focus_changed)
+            {
                 pane.ghostty.refresh();
             }
         }

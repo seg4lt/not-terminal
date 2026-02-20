@@ -1,17 +1,17 @@
 use crate::app::git_worktrees::{add_worktree, remove_worktree, scan_worktrees};
 use crate::app::model::{
-    BrowserRecord, PersistedState, ProjectRecord, TerminalRecord, TreeStateRecord, UiState, WorktreeRecord,
-    create_id, infer_project_name, next_browser_name, next_project_name, next_terminal_name,
+    BrowserRecord, PersistedState, ProjectRecord, TerminalRecord, TreeStateRecord, UiState,
+    WorktreeRecord, create_id, infer_project_name, next_browser_name, next_project_name,
+    next_terminal_name,
 };
 use crate::app::persistence;
 use crate::app::runtime::{PaneRuntime, RuntimeSession};
 use crate::ghostty_embed::{
-    GhosttyEmbed, GhosttyRuntimeAction, host_view_free, host_view_new,
-    ns_view_ptr,
+    GhosttyEmbed, GhosttyRuntimeAction, host_view_free, host_view_new, ns_view_ptr,
 };
 use crate::webview::WebView;
 use iced::{
-    Point, Size, Subscription, Task, keyboard,
+    Point, Size, Subscription, Task, keyboard, time,
     window::{self},
 };
 use std::collections::{HashMap, HashSet};
@@ -152,7 +152,6 @@ pub(crate) struct App {
     pub(crate) last_branch_refresh_terminal_id: Option<String>,
     pub(crate) last_branch_refresh_at: Option<Instant>,
     pub(crate) last_ghostty_activity: Instant,
-    pub(crate) frame_counter: u64,
     /// Tracks exit status of terminals by ID
     pub(crate) terminal_status: HashMap<String, TerminalStatus>,
     /// Terminals that have rung the bell (awaiting user input)
@@ -275,7 +274,6 @@ impl App {
             last_branch_refresh_terminal_id: None,
             last_branch_refresh_at: None,
             last_ghostty_activity: Instant::now(),
-            frame_counter: 0,
             terminal_status: HashMap::new(),
             terminal_awaiting_response: HashSet::new(),
             terminal_titles: HashMap::new(),
@@ -306,9 +304,21 @@ impl App {
         ];
 
         if !self.runtimes.is_empty() {
-            // Still use window::frames for the tick, but we'll skip work adaptively
-            // based on last_ghostty_activity in the tick handler
-            subscriptions.push(window::frames().map(|_| Message::GhosttyTick));
+            let time_since_activity = self.last_ghostty_activity.elapsed();
+
+            let cadence = if time_since_activity > Duration::from_secs(30) {
+                Duration::from_secs(2)
+            } else if time_since_activity > Duration::from_secs(10) {
+                Duration::from_millis(500)
+            } else if time_since_activity > Duration::from_secs(3) {
+                Duration::from_millis(100)
+            } else if time_since_activity > Duration::from_millis(500) {
+                Duration::from_millis(33)
+            } else {
+                Duration::from_millis(16)
+            };
+
+            subscriptions.push(time::every(cadence).map(|_| Message::GhosttyTick));
         }
 
         Subscription::batch(subscriptions)
@@ -705,7 +715,9 @@ impl App {
                     );
 
                     // Fuzzy match: all search terms must be found in the text
-                    if !search_terms.is_empty() && !search_terms.iter().all(|term| text.contains(term)) {
+                    if !search_terms.is_empty()
+                        && !search_terms.iter().all(|term| text.contains(term))
+                    {
                         continue;
                     }
 
@@ -826,7 +838,9 @@ impl App {
         // Sync browser webviews - only the active one is visible
         let browser_toolbar_height = 32.0;
         for (browser_id, webview) in &mut self.browser_webviews {
-            let is_active = active_browser_id.as_ref().is_some_and(|id| id == browser_id);
+            let is_active = active_browser_id
+                .as_ref()
+                .is_some_and(|id| id == browser_id);
             if is_active {
                 webview.set_frame(
                     x_logical as f64,
@@ -960,23 +974,23 @@ impl App {
                             self.set_terminal_status(terminal_id.clone(), status);
                         }
                         // Note: We DON'T clear awaiting state here - only keyboard input should clear it
-                        true  // Trigger UI update
+                        true // Trigger UI update
                     }
                     GhosttyRuntimeAction::RingBell { .. } => {
                         // Mark terminal as awaiting response
                         self.on_terminal_bell(terminal_id.clone());
-                        true  // Trigger UI update
+                        true // Trigger UI update
                     }
                     GhosttyRuntimeAction::SetTitle { surface_ptr, title } => {
                         // Handle title change - check for bell emoji
                         self.on_terminal_title(surface_ptr, title);
-                        true  // Trigger UI update
+                        true // Trigger UI update
                     }
                     GhosttyRuntimeAction::DesktopNotification { .. } => {
                         // Desktop notification means the terminal needs attention
                         // Mark as awaiting response
                         self.on_terminal_bell(terminal_id.clone());
-                        true  // Trigger UI update
+                        true // Trigger UI update
                     }
                 };
 
@@ -1728,7 +1742,8 @@ impl App {
     /// Mark a terminal as awaiting response (bell was rung)
     pub(crate) fn on_terminal_bell(&mut self, terminal_id: String) {
         self.terminal_awaiting_response.insert(terminal_id.clone());
-        self.terminal_status.insert(terminal_id, TerminalStatus::AwaitingResponse);
+        self.terminal_status
+            .insert(terminal_id, TerminalStatus::AwaitingResponse);
     }
 
     /// Clear awaiting response state when user provides input
@@ -1736,7 +1751,8 @@ impl App {
         self.terminal_awaiting_response.remove(terminal_id);
         // If the terminal was in AwaitingResponse state, change it back to Running
         if self.terminal_status.get(terminal_id) == Some(&TerminalStatus::AwaitingResponse) {
-            self.terminal_status.insert(terminal_id.to_string(), TerminalStatus::Running);
+            self.terminal_status
+                .insert(terminal_id.to_string(), TerminalStatus::Running);
         }
     }
 
@@ -1755,7 +1771,8 @@ impl App {
     /// Handle title change from Ghostty, checking for bell emoji
     pub(crate) fn on_terminal_title(&mut self, surface_ptr: usize, title: String) {
         // Find which terminal owns this surface by searching all runtimes
-        let terminal_id = self.runtimes
+        let terminal_id = self
+            .runtimes
             .iter()
             .find(|(_, runtime)| runtime.pane_id_for_surface(surface_ptr).is_some())
             .map(|(tid, _)| tid.clone());
