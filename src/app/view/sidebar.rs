@@ -203,8 +203,9 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
 
     list = list.push(container(detached_column).style(|_| project_group_style()));
 
-    // Browsers section
-    let browser_active = app.active_browser_id().is_some();
+    // Browsers section (only if enabled)
+    if app.persisted.ui.enable_browsers {
+        let browser_active = app.active_browser_id().is_some();
     let mut browser_column = iced::widget::column![
         container(
             row![
@@ -293,6 +294,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
     }
 
     list = list.push(container(browser_column).style(|_| project_group_style()));
+    }
 
     // Projects section
     let projects_active = app.persisted.active_project_id.is_some();

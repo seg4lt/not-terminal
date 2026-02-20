@@ -168,6 +168,13 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
     }
 
     if app.preferences_open {
+        let enable_browsers = app.persisted.ui.enable_browsers;
+        let browser_shortcut_color = if enable_browsers {
+            rgb(145, 150, 160)
+        } else {
+            rgb(100, 105, 115)
+        };
+
         let panel = container(
             iced::widget::column![
                 row![
@@ -177,18 +184,29 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                         .on_press(Message::OpenPreferences(false)),
                 ]
                 .spacing(8),
-                text("Shortcuts").size(14),
+                text("General").size(14),
                 checkbox(app.show_native_title_bar)
                     .label("Show native title bar")
                     .on_toggle(Message::SetShowNativeTitleBar)
                     .text_size(13),
+                checkbox(enable_browsers)
+                    .label("Enable browsers feature")
+                    .on_toggle(Message::SetEnableBrowsers)
+                    .text_size(13),
+                text("Shortcuts").size(14),
                 text("Cmd+1: Toggle sidebar").size(12),
                 text("Cmd+T: New terminal in active worktree").size(12),
                 text("Cmd+Shift+T: New detached terminal").size(12),
                 text("Cmd+W: Close active terminal").size(12),
                 text("Cmd+P: Quick open").size(12),
-                text("Cmd+B: New browser").size(12),
-                text("Cmd+Option+I: Browser DevTools").size(12),
+                container(text("Cmd+B: New browser").size(12)).style(move |_| ContainerStyle {
+                    text_color: Some(browser_shortcut_color),
+                    ..Default::default()
+                }),
+                container(text("Cmd+Option+I: Browser DevTools").size(12)).style(move |_| ContainerStyle {
+                    text_color: Some(browser_shortcut_color),
+                    ..Default::default()
+                }),
                 text("Cmd+, : Preferences").size(12),
                 text("Cmd+=/-/0: Font size").size(12),
                 text("Cmd+Shift+[ or ]: Previous/Next terminal").size(12),

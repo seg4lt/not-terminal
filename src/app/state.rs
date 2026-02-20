@@ -181,6 +181,7 @@ pub(crate) enum Message {
     Mouse(iced::mouse::Event),
     ToggleSidebar,
     SetShowNativeTitleBar(bool),
+    SetEnableBrowsers(bool),
     FilterChanged(String),
     AddProject,
     ProjectRescan(String),
@@ -364,6 +365,7 @@ impl App {
             sidebar_collapsed: self.sidebar_state.is_hidden(),
             show_native_title_bar: self.show_native_title_bar,
             sidebar_width: self.sidebar_width,
+            enable_browsers: self.persisted.ui.enable_browsers,
         };
 
         Task::perform(

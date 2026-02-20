@@ -114,6 +114,10 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.save_task()
             }
         }
+        Message::SetEnableBrowsers(value) => {
+            app.persisted.ui.enable_browsers = value;
+            app.save_task()
+        }
         Message::FilterChanged(value) => {
             app.filter_query = value;
             Task::none()
