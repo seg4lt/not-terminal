@@ -44,6 +44,7 @@ pub(crate) struct PaneRuntime {
     last_scale: Option<f64>,
     last_focus: Option<bool>,
     last_hidden: Option<bool>,
+    last_occluded: Option<bool>,
 }
 
 impl PaneRuntime {
@@ -57,6 +58,7 @@ impl PaneRuntime {
             last_scale: None,
             last_focus: None,
             last_hidden: None,
+            last_occluded: None,
         }
     }
 
@@ -199,6 +201,10 @@ impl RuntimeSession {
                     pane.ghostty.set_focus(false);
                     pane.last_focus = Some(false);
                 }
+                if pane.last_occluded != Some(false) {
+                    pane.ghostty.set_occlusion(false);
+                    pane.last_occluded = Some(false);
+                }
             }
             return;
         }
@@ -219,6 +225,10 @@ impl RuntimeSession {
                     pane.ghostty.set_focus(false);
                     pane.last_focus = Some(false);
                 }
+                if pane.last_occluded != Some(false) {
+                    pane.ghostty.set_occlusion(false);
+                    pane.last_occluded = Some(false);
+                }
                 continue;
             };
 
@@ -238,6 +248,11 @@ impl RuntimeSession {
             if hidden_changed {
                 host_view_set_hidden(pane.host_view, false);
                 pane.last_hidden = Some(false);
+            }
+            let occlusion_changed = pane.last_occluded != Some(true);
+            if occlusion_changed {
+                pane.ghostty.set_occlusion(true);
+                pane.last_occluded = Some(true);
             }
 
             let width_px = (rect.width.max(1.0) as f64 * scale).round().max(1.0) as u32;
@@ -267,6 +282,7 @@ impl RuntimeSession {
                     || hidden_changed
                     || scale_changed
                     || size_changed
+                    || occlusion_changed
                     || focus_changed)
             {
                 pane.ghostty.refresh();

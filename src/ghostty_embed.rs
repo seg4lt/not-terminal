@@ -206,6 +206,7 @@ mod macos {
         fn ghostty_surface_set_size(surface: *mut c_void, width: u32, height: u32);
         fn ghostty_surface_set_content_scale(surface: *mut c_void, x: f64, y: f64);
         fn ghostty_surface_set_focus(surface: *mut c_void, focused: bool);
+        fn ghostty_surface_set_occlusion(surface: *mut c_void, visible: bool);
         fn ghostty_surface_refresh(surface: *mut c_void);
         fn ghostty_surface_key(surface: *mut c_void, event: GhosttyInputKey) -> bool;
         fn ghostty_surface_key_is_binding(
@@ -389,6 +390,12 @@ mod macos {
             unsafe {
                 ghostty_surface_set_focus(self.surface, focused);
                 ghostty_app_set_focus(self.app, focused);
+            }
+        }
+
+        pub fn set_occlusion(&mut self, visible: bool) {
+            unsafe {
+                ghostty_surface_set_occlusion(self.surface, visible);
             }
         }
 
