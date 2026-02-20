@@ -458,6 +458,18 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 Task::none()
             }
         },
+        Message::RemoveProject(project_id) => match app.remove_project(&project_id) {
+            Ok(()) => {
+                app.status = String::from("Project removed");
+                app.ensure_active_runtime();
+                app.sync_runtime_views();
+                app.save_task()
+            }
+            Err(error) => {
+                app.status = format!("Failed to remove project: {error}");
+                Task::none()
+            }
+        },
         Message::SwitchTerminalByOffset(offset) => {
             app.switch_terminal_by_offset(offset);
             app.ensure_active_runtime();

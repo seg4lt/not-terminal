@@ -232,6 +232,7 @@ pub(crate) enum Message {
         project_id: String,
         worktree_id: String,
     },
+    RemoveProject(String),
     SwitchTerminalByOffset(i32),
     ActiveBranchResolved {
         terminal_id: String,

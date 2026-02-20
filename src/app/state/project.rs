@@ -248,4 +248,36 @@ impl App {
             toggle_in_list(&mut project.tree_state.collapsed_worktrees, worktree_id);
         }
     }
+
+    pub(crate) fn remove_project(&mut self, project_id: &str) -> Result<(), String> {
+        let project_idx = self
+            .persisted
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+            .ok_or_else(|| String::from("Project not found"))?;
+
+        let project = &self.persisted.projects[project_idx];
+
+        let terminal_ids: Vec<String> = project
+            .worktrees
+            .iter()
+            .flat_map(|worktree| {
+                worktree
+                    .terminals
+                    .iter()
+                    .map(|terminal| terminal.id.clone())
+            })
+            .collect();
+
+        for terminal_id in terminal_ids {
+            self.remove_runtime(&terminal_id);
+        }
+
+        self.persisted.projects.remove(project_idx);
+
+        self.normalize_selection();
+
+        Ok(())
+    }
 }

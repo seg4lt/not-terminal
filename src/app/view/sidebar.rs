@@ -403,6 +403,10 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                         .padding([0, 5])
                         .style(|_, status| subtle_action_button_style(status))
                         .on_press(Message::ProjectRescan(project_id.clone())),
+                    button(text("×").size(13))
+                        .padding([0, 5])
+                        .style(|_, status| subtle_delete_button_style(status))
+                        .on_press(Message::RemoveProject(project_id.clone())),
                 ]
                 .spacing(5)
                 .align_y(Alignment::Center),
