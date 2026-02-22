@@ -258,6 +258,7 @@ mod macos {
         fn rust_ghostty_host_view_set_hidden(host_ns_view: *mut c_void, hidden: bool);
         fn rust_ghostty_host_view_free(host_ns_view: *mut c_void);
         fn rust_ghostty_disable_system_hide_shortcuts();
+        fn rust_ghostty_register_focus_toggle_hotkey();
     }
 
     pub struct GhosttyEmbed {
@@ -711,6 +712,12 @@ mod macos {
     pub fn disable_system_hide_shortcuts() {
         unsafe {
             rust_ghostty_disable_system_hide_shortcuts();
+        }
+    }
+
+    pub fn register_focus_toggle_hotkey() {
+        unsafe {
+            rust_ghostty_register_focus_toggle_hotkey();
         }
     }
 
@@ -1197,7 +1204,7 @@ mod macos {
 #[cfg(target_os = "macos")]
 pub use macos::{
     GhosttyEmbed, disable_system_hide_shortcuts, host_view_free, host_view_new,
-    host_view_set_frame, host_view_set_hidden, ns_view_ptr,
+    host_view_set_frame, host_view_set_hidden, ns_view_ptr, register_focus_toggle_hotkey,
 };
 
 #[cfg(not(target_os = "macos"))]
@@ -1262,3 +1269,6 @@ pub fn host_view_free(_host_ns_view: usize) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn disable_system_hide_shortcuts() {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn register_focus_toggle_hotkey() {}

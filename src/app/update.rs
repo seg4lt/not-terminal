@@ -1,6 +1,6 @@
 use super::state::{App, Message};
 use crate::app::state::{QuickOpenEntry, QuickOpenEntryKind};
-use crate::ghostty_embed::disable_system_hide_shortcuts;
+use crate::ghostty_embed::{disable_system_hide_shortcuts, register_focus_toggle_hotkey};
 use iced::{Task, widget::operation, window};
 use std::time::Instant;
 
@@ -21,6 +21,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::HostViewResolved(ns_view) => {
             app.host_ns_view = ns_view;
             if ns_view.is_some() {
+                register_focus_toggle_hotkey();
                 disable_system_hide_shortcuts();
             }
             if ns_view.is_none() {

@@ -312,6 +312,7 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 text("Cmd+Shift+T: New detached terminal").size(12),
                 text("Cmd+W: Close active terminal").size(12),
                 text("Cmd+P: Quick open").size(12),
+                text("Cmd+Option+Shift+O: Toggle app focus").size(12),
                 text("Quick Open: Cmd+Backspace closes selected terminal").size(12),
                 container(text("Cmd+B: New browser").size(12)).style(move |_| ContainerStyle {
                     text_color: Some(browser_shortcut_color),

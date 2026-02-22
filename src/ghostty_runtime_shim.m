@@ -7,6 +7,7 @@
 #include <pthread.h>
 
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
 
 #include "../vendor/ghostty/include/ghostty.h"
 
@@ -477,6 +478,84 @@ static void rust_ghostty_strip_hide_shortcuts_from_menu(NSMenu *menu) {
       rust_ghostty_strip_hide_shortcuts_from_menu(submenu);
     }
   }
+}
+
+static EventHotKeyRef rust_ghostty_focus_toggle_hotkey_ref = NULL;
+static EventHandlerRef rust_ghostty_focus_toggle_handler_ref = NULL;
+static NSRunningApplication *rust_ghostty_previous_front_app = nil;
+
+static OSStatus rust_ghostty_focus_toggle_hotkey_handler(
+    EventHandlerCallRef _next_handler,
+    EventRef event,
+    void *_user_data) {
+  (void)_next_handler;
+  (void)_user_data;
+
+  if (GetEventClass(event) != kEventClassKeyboard ||
+      GetEventKind(event) != kEventHotKeyPressed) {
+    return noErr;
+  }
+
+  if (NSApp == nil) {
+    return noErr;
+  }
+
+  if ([NSApp isActive]) {
+    if (rust_ghostty_previous_front_app != nil &&
+        ![rust_ghostty_previous_front_app isTerminated]) {
+      [rust_ghostty_previous_front_app activateWithOptions:0];
+    }
+    return noErr;
+  }
+
+  NSRunningApplication *front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+  if (front != nil &&
+      ![front.bundleIdentifier isEqualToString:[[NSRunningApplication currentApplication] bundleIdentifier]]) {
+    if (rust_ghostty_previous_front_app != front) {
+      [rust_ghostty_previous_front_app release];
+      rust_ghostty_previous_front_app = [front retain];
+    }
+  }
+
+  [NSApp activateIgnoringOtherApps:YES];
+  return noErr;
+}
+
+void rust_ghostty_register_focus_toggle_hotkey(void) {
+  if (![NSThread isMainThread]) {
+    return;
+  }
+
+  if (rust_ghostty_focus_toggle_hotkey_ref != NULL) {
+    return;
+  }
+
+  EventTypeSpec event_type = {
+      .eventClass = kEventClassKeyboard,
+      .eventKind = kEventHotKeyPressed,
+  };
+
+  if (rust_ghostty_focus_toggle_handler_ref == NULL) {
+    InstallApplicationEventHandler(
+        rust_ghostty_focus_toggle_hotkey_handler,
+        1,
+        &event_type,
+        NULL,
+        &rust_ghostty_focus_toggle_handler_ref);
+  }
+
+  EventHotKeyID hotkey_id = {
+      .signature = 'EGTY',
+      .id = 1,
+  };
+
+  RegisterEventHotKey(
+      kVK_ANSI_O,
+      cmdKey | optionKey | shiftKey,
+      hotkey_id,
+      GetApplicationEventTarget(),
+      0,
+      &rust_ghostty_focus_toggle_hotkey_ref);
 }
 
 void rust_ghostty_disable_system_hide_shortcuts(void) {
