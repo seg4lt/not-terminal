@@ -252,6 +252,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.quick_open_open = false;
                 app.rename_dialog = None;
                 app.add_worktree_dialog = None;
+                app.worktree_context_menu = None;
             }
             app.sync_runtime_views();
             Task::none()
@@ -265,6 +266,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.preferences_open = false;
                 app.rename_dialog = None;
                 app.add_worktree_dialog = None;
+                app.worktree_context_menu = None;
             }
             app.sync_runtime_views();
             if open {
@@ -343,6 +345,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.quick_open_open = false;
             app.preferences_open = false;
             app.add_worktree_dialog = None;
+            app.worktree_context_menu = None;
             app.sync_runtime_views();
             if app.rename_dialog.is_some() {
                 Task::batch([
@@ -358,6 +361,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.quick_open_open = false;
             app.preferences_open = false;
             app.add_worktree_dialog = None;
+            app.worktree_context_menu = None;
             app.sync_runtime_views();
             if app.rename_dialog.is_some() {
                 Task::batch([
@@ -373,6 +377,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.quick_open_open = false;
             app.preferences_open = false;
             app.add_worktree_dialog = None;
+            app.worktree_context_menu = None;
             app.sync_runtime_views();
             if app.rename_dialog.is_some() {
                 Task::batch([
@@ -408,6 +413,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.quick_open_open = false;
             app.preferences_open = false;
             app.rename_dialog = None;
+            app.worktree_context_menu = None;
             app.sync_runtime_views();
             if app.add_worktree_dialog.is_some() {
                 Task::batch([
@@ -489,6 +495,68 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 Task::none()
             }
         },
+        Message::OpenWorktreeContextMenu {
+            project_id,
+            worktree_id,
+            show_project_actions,
+        } => {
+            app.worktree_context_menu = Some(crate::app::state::WorktreeContextMenu {
+                project_id,
+                worktree_id,
+                show_project_actions,
+            });
+            app.quick_open_open = false;
+            app.preferences_open = false;
+            app.rename_dialog = None;
+            app.add_worktree_dialog = None;
+            app.sync_runtime_views();
+            Task::none()
+        }
+        Message::CloseWorktreeContextMenu => {
+            app.worktree_context_menu = None;
+            app.sync_runtime_views();
+            Task::none()
+        }
+        Message::WorktreeContextMenuNewTerminal => {
+            let Some(menu) = app.worktree_context_menu.clone() else {
+                return Task::none();
+            };
+            app.worktree_context_menu = None;
+            update(
+                app,
+                Message::AddTerminal {
+                    project_id: menu.project_id,
+                    worktree_id: menu.worktree_id,
+                },
+            )
+        }
+        Message::WorktreeContextMenuRenameWorktree => {
+            let Some(menu) = app.worktree_context_menu.clone() else {
+                return Task::none();
+            };
+            app.worktree_context_menu = None;
+            update(
+                app,
+                Message::StartRenameWorktree {
+                    project_id: menu.project_id,
+                    worktree_id: menu.worktree_id,
+                },
+            )
+        }
+        Message::WorktreeContextMenuProjectRescan => {
+            let Some(menu) = app.worktree_context_menu.clone() else {
+                return Task::none();
+            };
+            app.worktree_context_menu = None;
+            update(app, Message::ProjectRescan(menu.project_id))
+        }
+        Message::WorktreeContextMenuRemoveProject => {
+            let Some(menu) = app.worktree_context_menu.clone() else {
+                return Task::none();
+            };
+            app.worktree_context_menu = None;
+            update(app, Message::RemoveProject(menu.project_id))
+        }
         Message::SwitchTerminalByOffset(offset) => {
             app.switch_terminal_by_offset(offset);
             app.ensure_active_runtime();

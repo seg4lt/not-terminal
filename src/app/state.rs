@@ -104,6 +104,13 @@ pub(crate) struct AddWorktreeDialog {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct WorktreeContextMenu {
+    pub(crate) project_id: String,
+    pub(crate) worktree_id: String,
+    pub(crate) show_project_actions: bool,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum QuickOpenEntryKind {
     ExistingTerminal {
         terminal_id: String,
@@ -161,6 +168,7 @@ pub(crate) struct App {
     pub(crate) quick_open_ignore_next_query_change: bool,
     pub(crate) rename_dialog: Option<RenameDialog>,
     pub(crate) add_worktree_dialog: Option<AddWorktreeDialog>,
+    pub(crate) worktree_context_menu: Option<WorktreeContextMenu>,
     pub(crate) suppress_next_key_release: bool,
     pub(crate) branch_by_terminal: HashMap<String, String>,
     pub(crate) last_branch_refresh_terminal_id: Option<String>,
@@ -235,6 +243,16 @@ pub(crate) enum Message {
     RenameCommit,
     RenameCancel,
     StartAddWorktree(String),
+    OpenWorktreeContextMenu {
+        project_id: String,
+        worktree_id: String,
+        show_project_actions: bool,
+    },
+    CloseWorktreeContextMenu,
+    WorktreeContextMenuNewTerminal,
+    WorktreeContextMenuRenameWorktree,
+    WorktreeContextMenuProjectRescan,
+    WorktreeContextMenuRemoveProject,
     AddWorktreeBranchChanged(String),
     AddWorktreePathChanged(String),
     FocusAddWorktreePath,
@@ -288,6 +306,7 @@ impl App {
             quick_open_ignore_next_query_change: false,
             rename_dialog: None,
             add_worktree_dialog: None,
+            worktree_context_menu: None,
             suppress_next_key_release: false,
             branch_by_terminal: HashMap::new(),
             last_branch_refresh_terminal_id: None,
@@ -1067,6 +1086,7 @@ impl App {
             || self.preferences_open
             || self.rename_dialog.is_some()
             || self.add_worktree_dialog.is_some()
+            || self.worktree_context_menu.is_some()
     }
 
     pub(crate) fn select_project(&mut self, project_id: &str) {

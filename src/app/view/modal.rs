@@ -140,6 +140,54 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
         );
     }
 
+    if let Some(menu) = &app.worktree_context_menu {
+        let mut actions = iced::widget::column![
+            text("Worktree Actions").size(16),
+            button(text("New terminal").size(12))
+                .style(|_, status| toolbar_button_style(status))
+                .on_press(Message::WorktreeContextMenuNewTerminal),
+            button(text("Rename worktree").size(12))
+                .style(|_, status| toolbar_button_style(status))
+                .on_press(Message::WorktreeContextMenuRenameWorktree),
+        ]
+        .spacing(8);
+
+        if menu.show_project_actions {
+            actions = actions
+                .push(
+                    button(text("Rescan project").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::WorktreeContextMenuProjectRescan),
+                )
+                .push(
+                    button(text("Remove project").size(12))
+                        .style(|_, status| subtle_delete_button_style(status))
+                        .on_press(Message::WorktreeContextMenuRemoveProject),
+                );
+        }
+
+        actions = actions.push(
+            button(text("Close").size(12))
+                .style(|_, status| toolbar_button_style(status))
+                .on_press(Message::CloseWorktreeContextMenu),
+        );
+
+        let panel = container(actions)
+            .padding(12)
+            .width(Length::Fixed(260.0))
+            .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
     if let Some(dialog) = &app.rename_dialog {
         let title = match dialog.target {
             crate::app::state::RenameTarget::Worktree { .. } => "Rename Worktree",

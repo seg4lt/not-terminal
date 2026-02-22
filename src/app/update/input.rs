@@ -298,6 +298,9 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
         ShortcutAction::PreviousTerminal => super::update(app, Message::SwitchTerminalByOffset(-1)),
         ShortcutAction::ModalCancel => {
             app.suppress_next_key_release = true;
+            if app.worktree_context_menu.is_some() {
+                return super::update(app, Message::CloseWorktreeContextMenu);
+            }
             if app.rename_dialog.is_some() {
                 return super::update(app, Message::RenameCancel);
             }

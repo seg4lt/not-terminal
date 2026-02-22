@@ -74,27 +74,6 @@ fn terminal_status_border_color(app: &App, terminal_id: &str, is_active: bool) -
     }
 }
 
-fn worktree_branch_label(
-    app: &App,
-    project: &crate::app::model::ProjectRecord,
-    worktree: &crate::app::model::WorktreeRecord,
-) -> Option<String> {
-    if let Some(selected_terminal_id) = project.selected_terminal_id.as_deref()
-        && worktree
-            .terminals
-            .iter()
-            .any(|terminal| terminal.id == selected_terminal_id)
-        && let Some(branch) = app.branch_by_terminal.get(selected_terminal_id)
-    {
-        return Some(branch.clone());
-    }
-
-    worktree
-        .terminals
-        .iter()
-        .find_map(|terminal| app.branch_by_terminal.get(&terminal.id).cloned())
-}
-
 fn normalize_path_key(path: &str) -> &str {
     path.trim_end_matches(['/', '\\'])
 }
@@ -429,8 +408,6 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                         .iter()
                         .any(|terminal| &terminal.id == selected)
                 });
-            let branch =
-                worktree_branch_label(app, project, worktree).unwrap_or_else(|| String::from("-"));
             let worktree_label = if worktree.missing {
                 format!("{} (missing)", &worktree.name)
             } else {
@@ -462,10 +439,6 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                     container(
                         iced::widget::column![
                             text(combined_label).size(13).wrapping(Wrapping::None),
-                            text(format!("branch: {}", branch))
-                                .size(10)
-                                .color(rgb(140, 146, 158))
-                                .wrapping(Wrapping::None),
                         ]
                         .spacing(1)
                     )
@@ -492,44 +465,23 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
             .align_y(Alignment::Center);
 
             if worktree_index == 0 {
-                worktree_row = worktree_row
-                    .push(
-                        button(text("⊞").size(10))
-                            .padding([0, 5])
-                            .style(|_, status| subtle_action_button_style(status))
-                            .on_press(Message::StartAddWorktree(project_id.clone())),
-                    )
-                    .push(
-                        button(text("↻").size(10))
-                            .padding([0, 5])
-                            .style(|_, status| subtle_action_button_style(status))
-                            .on_press(Message::ProjectRescan(project_id.clone())),
-                    )
-                    .push(
-                        button(text("🗑").size(10))
-                            .padding([0, 5])
-                            .style(|_, status| subtle_delete_button_style(status))
-                            .on_press(Message::RemoveProject(project_id.clone())),
-                    );
+                worktree_row = worktree_row.push(
+                    button(text("⊞").size(10))
+                        .padding([0, 5])
+                        .style(|_, status| subtle_action_button_style(status))
+                        .on_press(Message::StartAddWorktree(project_id.clone())),
+                );
             }
 
             worktree_row = worktree_row
                 .push(
-                    button(text("+").size(12))
+                    button(text("⋯").size(13))
                         .padding([0, 5])
                         .style(|_, status| subtle_action_button_style(status))
-                        .on_press(Message::AddTerminal {
+                        .on_press(Message::OpenWorktreeContextMenu {
                             project_id: project_id.clone(),
                             worktree_id: worktree_id.clone(),
-                        }),
-                )
-                .push(
-                    button(text("✎").size(10))
-                        .padding([0, 5])
-                        .style(|_, status| subtle_action_button_style(status))
-                        .on_press(Message::StartRenameWorktree {
-                            project_id: project_id.clone(),
-                            worktree_id: worktree_id.clone(),
+                            show_project_actions: worktree_index == 0,
                         }),
                 )
                 .push(
