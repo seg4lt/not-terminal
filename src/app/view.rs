@@ -142,14 +142,6 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
         .into()
 }
 
-fn monogram_chip(name: &str) -> Element<'static, Message> {
-    let monogram = monogram(name);
-    container(text(monogram).size(10).color(rgb(200, 205, 215)))
-        .padding([2, 6])
-        .style(|_| chip_style())
-        .into()
-}
-
 fn detached_icon_chip() -> Element<'static, Message> {
     container(text("⬚").size(12).color(rgb(185, 190, 200)))
         .padding([2, 6])
@@ -169,21 +161,6 @@ fn project_icon_chip() -> Element<'static, Message> {
         .padding([2, 6])
         .style(|_| chip_style())
         .into()
-}
-
-fn monogram(name: &str) -> String {
-    let mut chars = name.chars().filter(|ch| ch.is_alphanumeric());
-    let first = chars.next().unwrap_or('P');
-    let second = chars.next().unwrap_or(' ');
-    if second == ' ' {
-        first.to_uppercase().collect()
-    } else {
-        format!(
-            "{}{}",
-            first.to_uppercase().next().unwrap_or('P'),
-            second.to_uppercase().next().unwrap_or('R')
-        )
-    }
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> Color {
@@ -785,34 +762,6 @@ fn subtle_delete_button_style(status: button::Status) -> button::Style {
     }
 
     style
-}
-
-fn worktree_left_border_style(active: bool) -> ContainerStyle {
-    ContainerStyle {
-        background: Some(Background::Color(if active {
-            rgb(88, 120, 168)
-        } else {
-            rgb(45, 52, 68)
-        })),
-        border: Border {
-            width: 0.0,
-            color: Color::TRANSPARENT,
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
-fn terminal_left_border_style() -> ContainerStyle {
-    ContainerStyle {
-        background: Some(Background::Color(rgb(35, 40, 52))),
-        border: Border {
-            width: 0.0,
-            color: Color::TRANSPARENT,
-            ..Default::default()
-        },
-        ..Default::default()
-    }
 }
 
 #[allow(dead_code)]

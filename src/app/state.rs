@@ -197,7 +197,9 @@ pub(crate) enum Message {
     FilterChanged(String),
     AddProject,
     ProjectRescan(String),
+    #[allow(dead_code)]
     SelectProject(String),
+    #[allow(dead_code)]
     ToggleProjectCollapsed(String),
     ToggleWorktreeCollapsed {
         project_id: String,
@@ -844,6 +846,7 @@ impl App {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn project_collapsed(project: &ProjectRecord) -> bool {
         project.tree_state.collapsed_projects.contains(&project.id)
     }
