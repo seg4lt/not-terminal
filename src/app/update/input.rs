@@ -36,7 +36,8 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
             | ShortcutAction::ModalSubmit
             | ShortcutAction::ModalFocusNext
             | ShortcutAction::ModalFocusPrevious
-            | ShortcutAction::ModalCloseQuickOpenTerminal),
+            | ShortcutAction::ModalCloseQuickOpenTerminal
+            | ShortcutAction::OpenQuickOpen),
         ) = shortcut_action
         {
             return apply_shortcut(app, action);
@@ -264,7 +265,9 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
         }
         ShortcutAction::NewDetachedTerminal => super::update(app, Message::AddDetachedTerminal),
         ShortcutAction::CloseActiveTerminal => super::update(app, Message::CloseActiveTerminal),
-        ShortcutAction::OpenQuickOpen => super::update(app, Message::OpenQuickOpen(true)),
+        ShortcutAction::OpenQuickOpen => {
+            super::update(app, Message::OpenQuickOpen(!app.quick_open_open))
+        }
         ShortcutAction::OpenPreferences => super::update(app, Message::OpenPreferences(true)),
         ShortcutAction::AddBrowser => super::update(app, Message::AddBrowser),
         ShortcutAction::BrowserDevTools => super::update(app, Message::BrowserDevTools),
