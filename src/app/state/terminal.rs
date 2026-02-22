@@ -129,13 +129,17 @@ impl App {
             return false;
         };
 
-        if let Some(locator) = self.find_terminal_locator(&active_terminal_id) {
+        self.close_terminal_by_id(&active_terminal_id)
+    }
+
+    pub(crate) fn close_terminal_by_id(&mut self, terminal_id: &str) -> bool {
+        if let Some(locator) = self.find_terminal_locator(terminal_id) {
             let project_id = self.persisted.projects[locator.project_idx].id.clone();
             let worktree_id = self.persisted.projects[locator.project_idx].worktrees
                 [locator.worktree_idx]
                 .id
                 .clone();
-            self.remove_terminal(&project_id, &worktree_id, &active_terminal_id);
+            self.remove_terminal(&project_id, &worktree_id, terminal_id);
             return true;
         }
 
@@ -143,9 +147,9 @@ impl App {
             .persisted
             .detached_terminals
             .iter()
-            .any(|terminal| terminal.id == active_terminal_id)
+            .any(|terminal| terminal.id == terminal_id)
         {
-            self.remove_detached_terminal(&active_terminal_id);
+            self.remove_detached_terminal(terminal_id);
             return true;
         }
 

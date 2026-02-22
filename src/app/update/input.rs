@@ -32,7 +32,8 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
             action @ (ShortcutAction::ModalCancel
             | ShortcutAction::ModalSubmit
             | ShortcutAction::ModalFocusNext
-            | ShortcutAction::ModalFocusPrevious),
+            | ShortcutAction::ModalFocusPrevious
+            | ShortcutAction::ModalCloseQuickOpenTerminal),
         ) = shortcut_action
         {
             return apply_shortcut(app, action);
@@ -349,6 +350,15 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
                 Task::none()
             } else {
                 operation::focus_previous()
+            }
+        }
+        ShortcutAction::ModalCloseQuickOpenTerminal => {
+            if app.quick_open_open {
+                app.suppress_next_key_release = true;
+                app.quick_open_ignore_next_query_change = true;
+                super::update(app, Message::QuickOpenCloseSelectedTerminal)
+            } else {
+                Task::none()
             }
         }
     }

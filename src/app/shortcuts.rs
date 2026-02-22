@@ -22,6 +22,7 @@ pub(crate) enum ShortcutAction {
     ModalSubmit,
     ModalFocusNext,
     ModalFocusPrevious,
+    ModalCloseQuickOpenTerminal,
 }
 
 pub(crate) fn detect_shortcut(
@@ -64,6 +65,14 @@ pub(crate) fn detect_shortcut(
         }
         if matches!(key.as_ref(), Key::Named(Named::ArrowUp)) && !modifiers.shift() {
             return Some(ShortcutAction::ModalFocusPrevious);
+        }
+        if is_backspace(key, physical_key)
+            && modifiers.logo()
+            && !modifiers.control()
+            && !modifiers.shift()
+            && !modifiers.alt()
+        {
+            return Some(ShortcutAction::ModalCloseQuickOpenTerminal);
         }
     }
 
@@ -230,4 +239,9 @@ fn is_bracket_left(value: Option<&str>, physical: &Physical) -> bool {
 
 fn is_bracket_right(value: Option<&str>, physical: &Physical) -> bool {
     matches!(value, Some("]") | Some("}")) || matches!(physical, Physical::Code(Code::BracketRight))
+}
+
+fn is_backspace(key: &Key, physical: &Physical) -> bool {
+    matches!(key.as_ref(), Key::Named(Named::Backspace))
+        || matches!(physical, Physical::Code(Code::Backspace))
 }

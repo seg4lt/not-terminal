@@ -260,6 +260,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             if open {
                 app.quick_open_query.clear();
                 app.quick_open_selected_index = 0;
+                app.quick_open_ignore_next_query_change = false;
                 app.preferences_open = false;
                 app.rename_dialog = None;
                 app.add_worktree_dialog = None;
@@ -275,6 +276,10 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
         }
         Message::QuickOpenQueryChanged(value) => {
+            if app.quick_open_ignore_next_query_change {
+                app.quick_open_ignore_next_query_change = false;
+                return Task::none();
+            }
             app.quick_open_query = value;
             app.quick_open_selected_index = 0; // Reset selection when query changes
             Task::none()
@@ -304,6 +309,29 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.quick_open_selected_index = 0;
             app.sync_runtime_views();
             app.save_task()
+        }
+        Message::QuickOpenCloseSelectedTerminal => {
+            let entries = app.quick_open_entries();
+            let Some(entry) = entries.get(app.quick_open_selected_index) else {
+                return Task::none();
+            };
+
+            if app.close_terminal_by_id(&entry.terminal_id) {
+                app.ensure_active_runtime();
+
+                let remaining_count = app.quick_open_entries().len().min(24);
+                app.quick_open_selected_index = if remaining_count == 0 {
+                    0
+                } else {
+                    app.quick_open_selected_index.min(remaining_count - 1)
+                };
+
+                app.sync_runtime_views();
+                app.status = String::from("Terminal closed");
+                app.save_task()
+            } else {
+                Task::none()
+            }
         }
         Message::StartRenameProject(project_id) => {
             app.start_rename_project(&project_id);

@@ -150,6 +150,7 @@ pub(crate) struct App {
     pub(crate) quick_open_open: bool,
     pub(crate) quick_open_query: String,
     pub(crate) quick_open_selected_index: usize,
+    pub(crate) quick_open_ignore_next_query_change: bool,
     pub(crate) rename_dialog: Option<RenameDialog>,
     pub(crate) add_worktree_dialog: Option<AddWorktreeDialog>,
     pub(crate) suppress_next_key_release: bool,
@@ -213,6 +214,7 @@ pub(crate) enum Message {
     QuickOpenQueryChanged(String),
     QuickOpenSubmit,
     QuickOpenSelect(String),
+    QuickOpenCloseSelectedTerminal,
     StartRenameProject(String),
     StartRenameWorktree {
         project_id: String,
@@ -274,6 +276,7 @@ impl App {
             quick_open_open: false,
             quick_open_query: String::new(),
             quick_open_selected_index: 0,
+            quick_open_ignore_next_query_change: false,
             rename_dialog: None,
             add_worktree_dialog: None,
             suppress_next_key_release: false,

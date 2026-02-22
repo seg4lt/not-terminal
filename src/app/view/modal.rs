@@ -199,13 +199,16 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 text("Cmd+Shift+T: New detached terminal").size(12),
                 text("Cmd+W: Close active terminal").size(12),
                 text("Cmd+P: Quick open").size(12),
+                text("Quick Open: Cmd+Backspace closes selected terminal").size(12),
                 container(text("Cmd+B: New browser").size(12)).style(move |_| ContainerStyle {
                     text_color: Some(browser_shortcut_color),
                     ..Default::default()
                 }),
-                container(text("Cmd+Option+I: Browser DevTools").size(12)).style(move |_| ContainerStyle {
-                    text_color: Some(browser_shortcut_color),
-                    ..Default::default()
+                container(text("Cmd+Option+I: Browser DevTools").size(12)).style(move |_| {
+                    ContainerStyle {
+                        text_color: Some(browser_shortcut_color),
+                        ..Default::default()
+                    }
                 }),
                 text("Cmd+, : Preferences").size(12),
                 text("Cmd+=/-/0: Font size").size(12),
