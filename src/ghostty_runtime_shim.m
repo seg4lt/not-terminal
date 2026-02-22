@@ -200,12 +200,23 @@ static void rust_ghostty_confirm_read_clipboard_cb(
     const char *value,
     void *state,
     ghostty_clipboard_request_e request) {
-  (void)userdata;
-  (void)value;
-  (void)state;
   (void)request;
-  // This is called after read_clipboard to confirm/paste the data
-  // The value has already been provided to Ghostty via complete_clipboard_request
+  // Ghostty embedded API requires the host to complete the pending clipboard
+  // request after this callback (vendor/ghostty/src/apprt/embedded.zig:
+  // confirm_read_clipboard + ghostty_surface_complete_clipboard_request).
+  rust_ghostty_runtime_bundle_t *bundle =
+      (rust_ghostty_runtime_bundle_t *)userdata;
+  if (bundle == NULL || state == NULL) {
+    return;
+  }
+
+  ghostty_surface_t surface = (ghostty_surface_t)bundle->surface;
+  if (surface == NULL) {
+    return;
+  }
+
+  const char *content = (value != NULL) ? value : "";
+  ghostty_surface_complete_clipboard_request(surface, content, state, true);
 }
 
 static void rust_ghostty_write_clipboard_cb(
