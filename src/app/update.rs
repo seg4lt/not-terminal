@@ -1,4 +1,5 @@
 use super::state::{App, Message};
+use crate::app::state::{QuickOpenEntry, QuickOpenEntryKind};
 use crate::ghostty_embed::disable_system_hide_shortcuts;
 use iced::{Task, widget::operation, window};
 use std::time::Instant;
@@ -276,6 +277,9 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
         }
         Message::QuickOpenQueryChanged(value) => {
+            if app.quick_open_open && app.keyboard_modifiers.logo() {
+                return Task::none();
+            }
             if app.quick_open_ignore_next_query_change {
                 app.quick_open_ignore_next_query_change = false;
                 return Task::none();
@@ -287,9 +291,8 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::QuickOpenSubmit => {
             let entries = app.quick_open_entries();
             if let Some(entry) = entries.get(app.quick_open_selected_index) {
-                app.select_terminal_by_id(&entry.terminal_id);
-                if let Err(error) = app.ensure_runtime_for_terminal(&entry.terminal_id) {
-                    app.status = error;
+                if !activate_quick_open_entry(app, entry) {
+                    return Task::none();
                 }
                 app.quick_open_open = false;
                 app.quick_open_query.clear();
@@ -299,10 +302,14 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::QuickOpenSelect(terminal_id) => {
-            app.select_terminal_by_id(&terminal_id);
-            if let Err(error) = app.ensure_runtime_for_terminal(&terminal_id) {
-                app.status = error;
+        Message::QuickOpenSelect(index) => {
+            let entries = app.quick_open_entries();
+            if let Some(entry) = entries.get(index) {
+                if !activate_quick_open_entry(app, entry) {
+                    return Task::none();
+                }
+            } else {
+                return Task::none();
             }
             app.quick_open_open = false;
             app.quick_open_query.clear();
@@ -310,16 +317,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.sync_runtime_views();
             app.save_task()
         }
-        Message::QuickOpenCloseSelectedTerminal => {
-            let entries = app.quick_open_entries();
-            let Some(entry) = entries.get(app.quick_open_selected_index) else {
-                return Task::none();
-            };
-
-            if app.close_terminal_by_id(&entry.terminal_id) {
+        Message::QuickOpenCloseTerminal(terminal_id) => {
+            if app.close_terminal_by_id(&terminal_id) {
                 app.ensure_active_runtime();
 
-                let remaining_count = app.quick_open_entries().len().min(24);
+                let remaining_count = app.quick_open_entries().len();
                 app.quick_open_selected_index = if remaining_count == 0 {
                     0
                 } else {
@@ -543,5 +545,36 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::BrowserForward => browser::handle_browser_forward(app),
         Message::BrowserReload => browser::handle_browser_reload(app),
         Message::BrowserDevTools => browser::handle_browser_devtools(app),
+    }
+}
+
+fn activate_quick_open_entry(app: &mut App, entry: &QuickOpenEntry) -> bool {
+    match &entry.kind {
+        QuickOpenEntryKind::ExistingTerminal { terminal_id } => {
+            app.select_terminal_by_id(terminal_id);
+            if let Err(error) = app.ensure_runtime_for_terminal(terminal_id) {
+                app.status = error;
+                return false;
+            }
+            true
+        }
+        QuickOpenEntryKind::CreateTerminal {
+            project_id,
+            worktree_id,
+        } => {
+            let Some(terminal_id) = app.add_terminal(project_id, worktree_id) else {
+                return false;
+            };
+            if let Err(error) = app.ensure_runtime_for_terminal(&terminal_id) {
+                app.status = error;
+                return false;
+            }
+            app.select_terminal(project_id, &terminal_id);
+            app.status = format!(
+                "Terminal added in {} / {}",
+                entry.project_name, entry.worktree_name
+            );
+            true
+        }
     }
 }

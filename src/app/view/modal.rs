@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::state::{App, Message};
+use crate::app::state::{App, Message, QuickOpenEntryKind};
 use iced::widget::{button, checkbox, container, row, scrollable, text, text_input};
 use iced::{Element, Length};
 
@@ -19,30 +19,93 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
         .spacing(6)
         .width(Length::Fill);
 
-        for (idx, entry) in entries.iter().take(24).enumerate() {
+        let mut create_header_shown = false;
+        for (idx, entry) in entries.iter().enumerate() {
+            let is_create_entry = matches!(entry.kind, QuickOpenEntryKind::CreateTerminal { .. });
+            if is_create_entry && !create_header_shown {
+                list = list.push(
+                    container(
+                        text("Create Terminal Targets")
+                            .size(11)
+                            .color(rgb(132, 156, 182)),
+                    )
+                    .padding([8, 6])
+                    .style(|_| quick_open_section_label_style()),
+                );
+                create_header_shown = true;
+            }
+
             let is_selected = idx == app.quick_open_selected_index;
-            let style = if is_selected {
+            let style = if is_selected && is_create_entry {
+                quick_open_create_selected_entry_style
+            } else if is_selected {
                 selected_entry_style
+            } else if is_create_entry {
+                quick_open_create_entry_style
             } else {
                 tree_icon_button_style
             };
+            let row_text = if is_create_entry {
+                format!(
+                    "+ New terminal in {} / {}",
+                    entry.project_name, entry.worktree_name
+                )
+            } else {
+                format!(
+                    "{} / {} / {}",
+                    entry.project_name, entry.worktree_name, entry.terminal_name
+                )
+            };
+            let badge = if is_create_entry { "NEW" } else { "TERM" };
+            let badge_text = if is_selected {
+                rgb(255, 255, 255)
+            } else if is_create_entry {
+                rgb(177, 225, 194)
+            } else {
+                rgb(145, 152, 165)
+            };
+            let badge_bg = if is_selected {
+                Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: if is_create_entry { 0.22 } else { 0.18 },
+                }
+            } else if is_create_entry {
+                rgb(33, 59, 43)
+            } else {
+                rgb(35, 40, 50)
+            };
+
             list = list.push(
                 button(
-                    text(format!(
-                        "{} / {} / {}",
-                        entry.project_name, entry.worktree_name, entry.terminal_name
-                    ))
-                    .size(13),
+                    row![
+                        container(text(badge).size(10).color(badge_text))
+                            .padding([1, 5])
+                            .style(move |_| ContainerStyle {
+                                background: Some(Background::Color(badge_bg)),
+                                border: Border {
+                                    width: 0.0,
+                                    color: Color::TRANSPARENT,
+                                    radius: 3.0.into(),
+                                },
+                                ..Default::default()
+                            }),
+                        text(row_text).size(13),
+                    ]
+                    .spacing(8),
                 )
                 .width(Length::Fill)
                 .padding([4, 6])
                 .style(move |_, status| style(status))
-                .on_press(Message::QuickOpenSelect(entry.terminal_id.clone())),
+                .on_press(Message::QuickOpenSelect(idx)),
             );
         }
 
         if entries.is_empty() {
-            list = list.push(container(text("No matching terminals").size(12)).padding([4, 2]));
+            list = list.push(
+                container(text("No terminals or worktrees available").size(12)).padding([4, 2]),
+            );
         }
 
         let panel = container(
@@ -54,6 +117,9 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                         .on_press(Message::OpenQuickOpen(false)),
                 ]
                 .spacing(8),
+                text("Enter: open terminal or create in selected worktree")
+                    .size(11)
+                    .color(rgb(138, 144, 156)),
                 scrollable(list).height(Length::Fill),
             ]
             .spacing(8),

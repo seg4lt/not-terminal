@@ -107,11 +107,22 @@ pub(crate) struct AddWorktreeDialog {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) enum QuickOpenEntryKind {
+    ExistingTerminal {
+        terminal_id: String,
+    },
+    CreateTerminal {
+        project_id: String,
+        worktree_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct QuickOpenEntry {
     pub(crate) project_name: String,
     pub(crate) worktree_name: String,
-    pub(crate) terminal_id: String,
     pub(crate) terminal_name: String,
+    pub(crate) kind: QuickOpenEntryKind,
 }
 
 #[derive(Debug, Clone)]
@@ -213,8 +224,8 @@ pub(crate) enum Message {
     OpenQuickOpen(bool),
     QuickOpenQueryChanged(String),
     QuickOpenSubmit,
-    QuickOpenSelect(String),
-    QuickOpenCloseSelectedTerminal,
+    QuickOpenSelect(usize),
+    QuickOpenCloseTerminal(String),
     StartRenameProject(String),
     StartRenameWorktree {
         project_id: String,
@@ -735,8 +746,10 @@ impl App {
                     entries.push(QuickOpenEntry {
                         project_name: project.name.clone(),
                         worktree_name: worktree.name.clone(),
-                        terminal_id: terminal.id.clone(),
                         terminal_name: terminal.name.clone(),
+                        kind: QuickOpenEntryKind::ExistingTerminal {
+                            terminal_id: terminal.id.clone(),
+                        },
                     });
                 }
             }
@@ -753,9 +766,41 @@ impl App {
             entries.push(QuickOpenEntry {
                 project_name: String::from("Detached"),
                 worktree_name: String::from("-"),
-                terminal_id: terminal.id.clone(),
                 terminal_name: terminal.name.clone(),
+                kind: QuickOpenEntryKind::ExistingTerminal {
+                    terminal_id: terminal.id.clone(),
+                },
             });
+        }
+
+        // "Create terminal" actions are always shown at the end for every worktree.
+        for project in &self.persisted.projects {
+            for worktree in &project.worktrees {
+                if worktree.missing {
+                    continue;
+                }
+
+                let text = format!(
+                    "{} {} new terminal",
+                    project.name.to_lowercase(),
+                    worktree.name.to_lowercase()
+                );
+
+                if !search_terms.is_empty() && !search_terms.iter().all(|term| text.contains(term))
+                {
+                    continue;
+                }
+
+                entries.push(QuickOpenEntry {
+                    project_name: project.name.clone(),
+                    worktree_name: worktree.name.clone(),
+                    terminal_name: String::from("New terminal"),
+                    kind: QuickOpenEntryKind::CreateTerminal {
+                        project_id: project.id.clone(),
+                        worktree_id: worktree.id.clone(),
+                    },
+                });
+            }
         }
 
         entries

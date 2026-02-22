@@ -242,6 +242,9 @@ fn is_bracket_right(value: Option<&str>, physical: &Physical) -> bool {
 }
 
 fn is_backspace(key: &Key, physical: &Physical) -> bool {
-    matches!(key.as_ref(), Key::Named(Named::Backspace))
-        || matches!(physical, Physical::Code(Code::Backspace))
+    matches!(
+        key.as_ref(),
+        Key::Named(Named::Backspace) | Key::Named(Named::Delete)
+    ) || matches!(physical, Physical::Code(Code::Backspace))
+        || matches!(physical, Physical::Code(Code::Delete))
 }

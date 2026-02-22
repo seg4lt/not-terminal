@@ -488,6 +488,78 @@ fn selected_entry_style(status: button::Status) -> button::Style {
     style
 }
 
+fn quick_open_create_entry_style(status: button::Status) -> button::Style {
+    let mut style = button::Style {
+        background: Some(Background::Color(rgb(20, 32, 29))),
+        text_color: rgb(201, 231, 211),
+        border: Border {
+            width: 1.0,
+            color: rgb(36, 62, 51),
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    };
+
+    match status {
+        button::Status::Hovered => {
+            style.background = Some(Background::Color(rgb(26, 42, 37)));
+            style.border.color = rgb(50, 80, 67);
+            style.text_color = rgb(220, 241, 227);
+        }
+        button::Status::Pressed => {
+            style.background = Some(Background::Color(rgb(22, 37, 33)));
+        }
+        button::Status::Disabled => {
+            style.background = Some(Background::Color(rgb(22, 28, 30)));
+            style.text_color = rgb(122, 140, 130);
+        }
+        button::Status::Active => {}
+    }
+
+    style
+}
+
+fn quick_open_create_selected_entry_style(status: button::Status) -> button::Style {
+    let mut style = button::Style {
+        background: Some(Background::Color(rgb(30, 125, 92))),
+        text_color: rgb(255, 255, 255),
+        border: Border {
+            width: 1.0,
+            color: rgb(74, 170, 136),
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    };
+
+    match status {
+        button::Status::Hovered => {
+            style.background = Some(Background::Color(rgb(42, 144, 108)));
+        }
+        button::Status::Pressed => {
+            style.background = Some(Background::Color(rgb(24, 109, 80)));
+        }
+        button::Status::Disabled => {
+            style.background = Some(Background::Color(rgb(60, 70, 80)));
+            style.text_color = rgb(150, 160, 170);
+        }
+        button::Status::Active => {}
+    }
+
+    style
+}
+
+fn quick_open_section_label_style() -> ContainerStyle {
+    ContainerStyle {
+        background: Some(Background::Color(rgb(24, 28, 37))),
+        border: Border {
+            width: 1.0,
+            color: rgb(43, 49, 62),
+            radius: 3.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
 fn chevron_button_style(status: button::Status) -> button::Style {
     let mut style = button::Style {
         background: Some(Background::Color(Color::TRANSPARENT)),

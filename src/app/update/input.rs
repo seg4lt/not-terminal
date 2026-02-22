@@ -1,5 +1,5 @@
 use crate::app::shortcuts::{ShortcutAction, detect_shortcut};
-use crate::app::state::{App, Message, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN};
+use crate::app::state::{App, Message, QuickOpenEntryKind, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN};
 use iced::{Task, keyboard, mouse, widget::operation};
 use std::time::Instant;
 
@@ -9,6 +9,9 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
 
     if let keyboard::Event::ModifiersChanged(modifiers) = &event {
         app.keyboard_modifiers = *modifiers;
+    }
+    if matches!(event, keyboard::Event::KeyPressed { .. }) {
+        app.quick_open_ignore_next_query_change = false;
     }
 
     if app.suppress_next_key_release {
@@ -328,7 +331,7 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
                 let entries = app.quick_open_entries();
                 if !entries.is_empty() {
                     app.quick_open_selected_index =
-                        (app.quick_open_selected_index + 1) % entries.len().min(24);
+                        (app.quick_open_selected_index + 1) % entries.len();
                 }
                 Task::none()
             } else {
@@ -340,7 +343,7 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             if app.quick_open_open {
                 let entries = app.quick_open_entries();
                 if !entries.is_empty() {
-                    let count = entries.len().min(24);
+                    let count = entries.len();
                     app.quick_open_selected_index = if app.quick_open_selected_index == 0 {
                         count - 1
                     } else {
@@ -354,9 +357,17 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
         }
         ShortcutAction::ModalCloseQuickOpenTerminal => {
             if app.quick_open_open {
+                let entries = app.quick_open_entries();
+                let Some(entry) = entries.get(app.quick_open_selected_index) else {
+                    return Task::none();
+                };
+                let QuickOpenEntryKind::ExistingTerminal { terminal_id } = &entry.kind else {
+                    return Task::none();
+                };
+
                 app.suppress_next_key_release = true;
                 app.quick_open_ignore_next_query_change = true;
-                super::update(app, Message::QuickOpenCloseSelectedTerminal)
+                super::update(app, Message::QuickOpenCloseTerminal(terminal_id.clone()))
             } else {
                 Task::none()
             }
