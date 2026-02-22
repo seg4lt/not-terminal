@@ -398,10 +398,6 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                             .padding([0, 5])
                             .style(|_, status| subtle_action_button_style(status))
                             .on_press(Message::StartAddWorktree(project_id.clone())),
-                        button(text("✎").size(10))
-                            .padding([0, 5])
-                            .style(|_, status| subtle_action_button_style(status))
-                            .on_press(Message::StartRenameProject(project_id.clone())),
                         button(text("↻").size(10))
                             .padding([0, 5])
                             .style(|_, status| subtle_action_button_style(status))
@@ -502,12 +498,6 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                             .padding([0, 5])
                             .style(|_, status| subtle_action_button_style(status))
                             .on_press(Message::StartAddWorktree(project_id.clone())),
-                    )
-                    .push(
-                        button(text("✎").size(10))
-                            .padding([0, 5])
-                            .style(|_, status| subtle_action_button_style(status))
-                            .on_press(Message::StartRenameProject(project_id.clone())),
                     )
                     .push(
                         button(text("↻").size(10))

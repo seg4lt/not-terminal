@@ -335,21 +335,6 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 Task::none()
             }
         }
-        Message::StartRenameProject(project_id) => {
-            app.start_rename_project(&project_id);
-            app.quick_open_open = false;
-            app.preferences_open = false;
-            app.add_worktree_dialog = None;
-            app.sync_runtime_views();
-            if app.rename_dialog.is_some() {
-                Task::batch([
-                    operation::focus("rename-input"),
-                    operation::move_cursor_to_end("rename-input"),
-                ])
-            } else {
-                Task::none()
-            }
-        }
         Message::StartRenameWorktree {
             project_id,
             worktree_id,

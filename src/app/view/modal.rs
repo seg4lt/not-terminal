@@ -142,7 +142,6 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
 
     if let Some(dialog) = &app.rename_dialog {
         let title = match dialog.target {
-            crate::app::state::RenameTarget::Project { .. } => "Rename Project",
             crate::app::state::RenameTarget::Worktree { .. } => "Rename Worktree",
             crate::app::state::RenameTarget::Terminal { .. } => "Rename Terminal",
             crate::app::state::RenameTarget::DetachedTerminal { .. } => "Rename Terminal",

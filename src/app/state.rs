@@ -76,9 +76,6 @@ impl SidebarState {
 
 #[derive(Debug, Clone)]
 pub(crate) enum RenameTarget {
-    Project {
-        project_id: String,
-    },
     Worktree {
         project_id: String,
         worktree_id: String,
@@ -228,7 +225,6 @@ pub(crate) enum Message {
     QuickOpenSubmit,
     QuickOpenSelect(usize),
     QuickOpenCloseTerminal(String),
-    StartRenameProject(String),
     StartRenameWorktree {
         project_id: String,
         worktree_id: String,
@@ -1135,28 +1131,9 @@ impl App {
             return;
         }
 
-        if let Some(project_idx) = self.active_project_index() {
-            let project_id = self.persisted.projects[project_idx].id.clone();
-            self.start_rename_project(&project_id);
+        if let Some((project_id, worktree_id)) = self.active_worktree_ids() {
+            self.start_rename_worktree(&project_id, &worktree_id);
         }
-    }
-
-    pub(crate) fn start_rename_project(&mut self, project_id: &str) {
-        let Some(project) = self
-            .persisted
-            .projects
-            .iter()
-            .find(|project| project.id == project_id)
-        else {
-            return;
-        };
-
-        self.rename_dialog = Some(RenameDialog {
-            target: RenameTarget::Project {
-                project_id: project_id.to_string(),
-            },
-            value: project.name.clone(),
-        });
     }
 
     pub(crate) fn start_rename_worktree(&mut self, project_id: &str, worktree_id: &str) {
@@ -1240,16 +1217,6 @@ impl App {
         }
 
         match dialog.target {
-            RenameTarget::Project { project_id } => {
-                if let Some(project) = self
-                    .persisted
-                    .projects
-                    .iter_mut()
-                    .find(|project| project.id == project_id)
-                {
-                    project.name = value.to_string();
-                }
-            }
             RenameTarget::Worktree {
                 project_id,
                 worktree_id,
