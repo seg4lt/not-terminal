@@ -169,6 +169,10 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.toggle_project_collapsed(&project_id);
             app.save_task()
         }
+        Message::ToggleAllProjectTreesCollapsed => {
+            app.toggle_all_project_trees_collapsed();
+            app.save_task()
+        }
         Message::ToggleWorktreeCollapsed {
             project_id,
             worktree_id,

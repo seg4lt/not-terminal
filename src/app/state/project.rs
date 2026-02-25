@@ -268,6 +268,43 @@ impl App {
         }
     }
 
+    pub(crate) fn all_project_worktrees_expanded(&self) -> bool {
+        let mut has_any_worktrees = false;
+
+        for project in &self.persisted.projects {
+            for worktree in &project.worktrees {
+                has_any_worktrees = true;
+                if project
+                    .tree_state
+                    .collapsed_worktrees
+                    .iter()
+                    .any(|id| id == &worktree.id)
+                {
+                    return false;
+                }
+            }
+        }
+
+        has_any_worktrees
+    }
+
+    pub(crate) fn toggle_all_project_trees_collapsed(&mut self) {
+        let collapse_all = self.all_project_worktrees_expanded();
+
+        for project in &mut self.persisted.projects {
+            if collapse_all {
+                project.tree_state.collapsed_worktrees = project
+                    .worktrees
+                    .iter()
+                    .map(|worktree| worktree.id.clone())
+                    .collect();
+            } else {
+                project.tree_state.collapsed_worktrees.clear();
+                project.tree_state.collapsed_projects.clear();
+            }
+        }
+    }
+
     pub(crate) fn toggle_worktree_collapsed(&mut self, project_id: &str, worktree_id: &str) {
         if let Some(project) = self
             .persisted

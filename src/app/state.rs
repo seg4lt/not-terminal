@@ -206,6 +206,7 @@ pub(crate) enum Message {
     SelectProject(String),
     #[allow(dead_code)]
     ToggleProjectCollapsed(String),
+    ToggleAllProjectTreesCollapsed,
     ToggleWorktreeCollapsed {
         project_id: String,
         worktree_id: String,

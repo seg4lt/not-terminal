@@ -313,6 +313,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
 
     // Projects section
     let projects_active = app.persisted.active_project_id.is_some();
+    let all_project_worktrees_expanded = app.all_project_worktrees_expanded();
     let mut projects_column = iced::widget::column![
         container(
             row![
@@ -330,6 +331,17 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                 )
                 .padding([3, 6])
                 .style(|_| subtle_badge_style()),
+                button(
+                    text(if all_project_worktrees_expanded {
+                        "Collapse all"
+                    } else {
+                        "Expand all"
+                    })
+                    .size(10)
+                )
+                .padding([0, 5])
+                .style(|_, status| subtle_action_button_style(status))
+                .on_press(Message::ToggleAllProjectTreesCollapsed),
                 button(text("+").size(12))
                     .padding([0, 5])
                     .style(|_, status| subtle_action_button_style(status))
