@@ -664,6 +664,12 @@ impl App {
         })
     }
 
+    pub(crate) fn terminal_has_splits(&self, terminal_id: &str) -> bool {
+        self.runtimes
+            .get(terminal_id)
+            .is_some_and(RuntimeSession::has_splits)
+    }
+
     pub(crate) fn refresh_active_branch_task(&mut self) -> Task<Message> {
         let Some(context) = self.active_terminal_context() else {
             return Task::none();

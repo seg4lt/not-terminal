@@ -8,6 +8,7 @@
 
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
+#import <objc/runtime.h>
 
 #include "../vendor/ghostty/include/ghostty.h"
 
@@ -436,6 +437,100 @@ void *rust_ghostty_host_view_new(void *parent_ns_view) {
   return (void *)host;
 }
 
+static const void *RUST_GHOSTTY_SPLIT_BADGE_KEY = &RUST_GHOSTTY_SPLIT_BADGE_KEY;
+
+static NSTextField *rust_ghostty_split_badge_label(NSView *host, bool create_if_missing) {
+  if (host == nil) {
+    return nil;
+  }
+
+  NSTextField *existing = (NSTextField *)objc_getAssociatedObject(host, RUST_GHOSTTY_SPLIT_BADGE_KEY);
+  if (existing != nil || !create_if_missing) {
+    return existing;
+  }
+
+  NSTextField *label = [NSTextField labelWithString:@"◫"];
+  if (label == nil) {
+    return nil;
+  }
+
+  [label setAlignment:NSTextAlignmentCenter];
+  [label setFont:[NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold]];
+  [label setSelectable:NO];
+  [label setEditable:NO];
+  [label setBezeled:NO];
+  [label setBordered:NO];
+  [label setDrawsBackground:YES];
+  [label setBackgroundColor:[NSColor colorWithCalibratedWhite:0.08 alpha:0.72]];
+  [label setTextColor:[NSColor colorWithCalibratedWhite:0.92 alpha:0.95]];
+  [label setAutoresizingMask:NSViewNotSizable];
+  [label setWantsLayer:YES];
+  [[label layer] setCornerRadius:4.0];
+  [[label layer] setBorderWidth:1.0];
+  [[label layer] setBorderColor:[[NSColor colorWithCalibratedWhite:0.55 alpha:0.55] CGColor]];
+  objc_setAssociatedObject(
+      host,
+      RUST_GHOSTTY_SPLIT_BADGE_KEY,
+      label,
+      OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  return label;
+}
+
+void rust_ghostty_host_view_set_split_badge(void *host_ns_view,
+                                            bool visible,
+                                            bool active) {
+  if (host_ns_view == NULL) {
+    return;
+  }
+
+  NSView *host = (NSView *)host_ns_view;
+  NSView *parent = [host superview];
+  if (parent == nil) {
+    return;
+  }
+
+  NSTextField *label = rust_ghostty_split_badge_label(host, visible);
+  if (label == nil) {
+    return;
+  }
+
+  if (!visible) {
+    [label setHidden:YES];
+    if ([label superview] != nil) {
+      [label removeFromSuperview];
+    }
+    return;
+  }
+
+  const CGFloat width = 18.0;
+  const CGFloat height = 14.0;
+  const CGFloat inset = 6.0;
+  NSRect frame = [host frame];
+  CGFloat x = NSMinX(frame) + NSWidth(frame) - width - inset;
+  CGFloat y = [parent isFlipped]
+                  ? (NSMinY(frame) + inset)
+                  : (NSMaxY(frame) - height - inset);
+
+  if ([label superview] != parent) {
+    [parent addSubview:label positioned:NSWindowAbove relativeTo:host];
+  } else {
+    [parent addSubview:label positioned:NSWindowAbove relativeTo:nil];
+  }
+
+  [label setFrame:NSMakeRect(x, y, width, height)];
+  [label setTextColor:active
+                        ? [NSColor colorWithCalibratedRed:0.89 green:0.92 blue:0.98 alpha:0.98]
+                        : [NSColor colorWithCalibratedRed:0.75 green:0.80 blue:0.88 alpha:0.92]];
+  [label setBackgroundColor:active
+                             ? [NSColor colorWithCalibratedWhite:0.07 alpha:0.86]
+                             : [NSColor colorWithCalibratedWhite:0.08 alpha:0.72]];
+  [[label layer] setBorderColor:[active
+                                    ? [NSColor colorWithCalibratedRed:0.68 green:0.74 blue:0.88 alpha:0.95]
+                                    : [NSColor colorWithCalibratedWhite:0.55 alpha:0.55]
+                                  CGColor]];
+  [label setHidden:NO];
+}
+
 void rust_ghostty_host_view_set_frame(void *host_ns_view,
                                       double x,
                                       double y,
@@ -468,6 +563,11 @@ void rust_ghostty_host_view_free(void *host_ns_view) {
   }
 
   NSView *host = (NSView *)host_ns_view;
+  NSTextField *label = (NSTextField *)objc_getAssociatedObject(host, RUST_GHOSTTY_SPLIT_BADGE_KEY);
+  if (label != nil) {
+    [label removeFromSuperview];
+    objc_setAssociatedObject(host, RUST_GHOSTTY_SPLIT_BADGE_KEY, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  }
   [host removeFromSuperview];
   [host release];
 }

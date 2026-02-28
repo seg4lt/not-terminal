@@ -256,6 +256,11 @@ mod macos {
             height: f64,
         );
         fn rust_ghostty_host_view_set_hidden(host_ns_view: *mut c_void, hidden: bool);
+        fn rust_ghostty_host_view_set_split_badge(
+            host_ns_view: *mut c_void,
+            visible: bool,
+            active: bool,
+        );
         fn rust_ghostty_host_view_free(host_ns_view: *mut c_void);
         fn rust_ghostty_disable_system_hide_shortcuts();
         fn rust_ghostty_register_focus_toggle_hotkey();
@@ -696,6 +701,16 @@ mod macos {
 
         unsafe {
             rust_ghostty_host_view_set_hidden(host_ns_view as *mut c_void, hidden);
+        }
+    }
+
+    pub fn host_view_set_split_badge(host_ns_view: usize, visible: bool, active: bool) {
+        if host_ns_view == 0 {
+            return;
+        }
+
+        unsafe {
+            rust_ghostty_host_view_set_split_badge(host_ns_view as *mut c_void, visible, active);
         }
     }
 
@@ -1204,7 +1219,8 @@ mod macos {
 #[cfg(target_os = "macos")]
 pub use macos::{
     GhosttyEmbed, disable_system_hide_shortcuts, host_view_free, host_view_new,
-    host_view_set_frame, host_view_set_hidden, ns_view_ptr, register_focus_toggle_hotkey,
+    host_view_set_frame, host_view_set_hidden, host_view_set_split_badge, ns_view_ptr,
+    register_focus_toggle_hotkey,
 };
 
 #[cfg(not(target_os = "macos"))]
@@ -1263,6 +1279,9 @@ pub fn host_view_set_frame(_host_ns_view: usize, _x: f64, _y: f64, _width: f64, 
 
 #[cfg(not(target_os = "macos"))]
 pub fn host_view_set_hidden(_host_ns_view: usize, _hidden: bool) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn host_view_set_split_badge(_host_ns_view: usize, _visible: bool, _active: bool) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn host_view_free(_host_ns_view: usize) {}

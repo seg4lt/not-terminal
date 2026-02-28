@@ -1,6 +1,7 @@
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyGotoSplitDirection, GhosttyResizeSplitDirection, GhosttyRuntimeAction,
     GhosttySplitDirection, host_view_free, host_view_set_frame, host_view_set_hidden,
+    host_view_set_split_badge,
 };
 use std::collections::HashMap;
 
@@ -45,6 +46,7 @@ pub(crate) struct PaneRuntime {
     last_focus: Option<bool>,
     last_hidden: Option<bool>,
     last_occluded: Option<bool>,
+    last_split_badge: Option<(bool, bool)>,
 }
 
 impl PaneRuntime {
@@ -59,6 +61,7 @@ impl PaneRuntime {
             last_focus: None,
             last_hidden: None,
             last_occluded: None,
+            last_split_badge: None,
         }
     }
 
@@ -98,6 +101,10 @@ impl RuntimeSession {
         self.panes
             .get_mut(&self.active_pane_id)
             .map(|pane| &mut pane.ghostty)
+    }
+
+    pub(crate) fn has_splits(&self) -> bool {
+        self.panes.len() > 1
     }
 
     pub(crate) fn tick_all(&mut self) -> TickOutcome {
@@ -197,6 +204,10 @@ impl RuntimeSession {
                     host_view_set_hidden(pane.host_view, true);
                     pane.last_hidden = Some(true);
                 }
+                if pane.last_split_badge != Some((false, false)) {
+                    host_view_set_split_badge(pane.host_view, false, false);
+                    pane.last_split_badge = Some((false, false));
+                }
                 if pane.last_focus != Some(false) {
                     pane.ghostty.set_focus(false);
                     pane.last_focus = Some(false);
@@ -210,6 +221,7 @@ impl RuntimeSession {
         }
 
         let layout = self.compute_layout(frame_width, frame_height);
+        let has_splits = self.panes.len() > 1;
 
         for (pane_id, pane) in &mut self.panes {
             let Some(rect) = layout
@@ -220,6 +232,10 @@ impl RuntimeSession {
                 if pane.last_hidden != Some(true) {
                     host_view_set_hidden(pane.host_view, true);
                     pane.last_hidden = Some(true);
+                }
+                if pane.last_split_badge != Some((false, false)) {
+                    host_view_set_split_badge(pane.host_view, false, false);
+                    pane.last_split_badge = Some((false, false));
                 }
                 if pane.last_focus != Some(false) {
                     pane.ghostty.set_focus(false);
@@ -275,6 +291,13 @@ impl RuntimeSession {
             if focus_changed {
                 pane.ghostty.set_focus(focused);
                 pane.last_focus = Some(focused);
+            }
+
+            // Split indicator is shown in the sidebar tree, not inside the terminal surface.
+            let split_badge = (false, focused);
+            if has_splits || pane.last_split_badge != Some(split_badge) {
+                host_view_set_split_badge(pane.host_view, split_badge.0, split_badge.1);
+                pane.last_split_badge = Some(split_badge);
             }
 
             if focused

@@ -141,6 +141,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
             let terminal_active = active_terminal_id
                 .as_ref()
                 .is_some_and(|active| active == &terminal_id);
+            let terminal_has_splits = app.terminal_has_splits(&terminal_id);
 
             // Get status-based indicator
             let (status_symbol, status_color) =
@@ -166,13 +167,25 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                         {
                             let name_element =
                                 text(&terminal.name).size(12).wrapping(Wrapping::None);
-                            let name_with_badge = if let TerminalStatus::Error(code) =
+                            let mut name_with_badge =
+                                row![container(name_element).width(Length::Fill).clip(true)]
+                                    .spacing(4)
+                                    .width(Length::Fill);
+
+                            if terminal_has_splits {
+                                name_with_badge = name_with_badge.push(
+                                    container(text("◫").size(9).color(rgb(176, 188, 212)))
+                                        .padding([1, 4])
+                                        .style(|_| subtle_badge_style()),
+                                );
+                            }
+
+                            if let TerminalStatus::Error(code) =
                                 app.get_terminal_status(&terminal_id)
                             {
-                                row![
-                                    container(name_element).width(Length::Fill).clip(true),
+                                name_with_badge = name_with_badge.push(
                                     container(
-                                        text(format!("{}", code)).size(9).color(rgb(220, 80, 80))
+                                        text(format!("{}", code)).size(9).color(rgb(220, 80, 80)),
                                     )
                                     .padding([1, 4])
                                     .style(|_| {
@@ -186,13 +199,9 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                                             ..Default::default()
                                         }
                                     }),
-                                ]
-                                .spacing(4)
-                                .width(Length::Fill)
-                            } else {
-                                row![container(name_element).width(Length::Fill).clip(true)]
-                                    .width(Length::Fill)
-                            };
+                                );
+                            }
+
                             button(container(name_with_badge).width(Length::Fill).clip(true))
                                 .padding([2, 4])
                                 .style(move |_, status| {
@@ -519,6 +528,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                     let terminal_active = active_terminal_id
                         .as_ref()
                         .is_some_and(|active| active == &terminal_id);
+                    let terminal_has_splits = app.terminal_has_splits(&terminal_id);
 
                     // Get status-based indicator
                     let (status_symbol, status_color) =
@@ -545,21 +555,34 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                                 {
                                     let name_element =
                                         text(&terminal.name).size(12).wrapping(Wrapping::None);
-                                    let name_with_badge = if let TerminalStatus::Error(code) =
+                                    let mut name_with_badge = row![
+                                        container(name_element).width(Length::Fill).clip(true)
+                                    ]
+                                    .spacing(4)
+                                    .width(Length::Fill);
+
+                                    if terminal_has_splits {
+                                        name_with_badge = name_with_badge.push(
+                                            container(text("◫").size(9).color(rgb(176, 188, 212)))
+                                                .padding([1, 4])
+                                                .style(|_| subtle_badge_style()),
+                                        );
+                                    }
+
+                                    if let TerminalStatus::Error(code) =
                                         app.get_terminal_status(&terminal_id)
                                     {
-                                        row![
-                                            container(name_element).width(Length::Fill).clip(true),
-                                            container(
-                                                text(format!("{}", code))
-                                                    .size(9)
-                                                    .color(rgb(220, 80, 80))
-                                            )
-                                            .padding([1, 4])
-                                            .style(
-                                                |_| ContainerStyle {
+                                        name_with_badge =
+                                            name_with_badge.push(
+                                                container(
+                                                    text(format!("{}", code))
+                                                        .size(9)
+                                                        .color(rgb(220, 80, 80)),
+                                                )
+                                                .padding([1, 4])
+                                                .style(|_| ContainerStyle {
                                                     background: Some(Background::Color(rgb(
-                                                        40, 30, 32
+                                                        40, 30, 32,
                                                     ))),
                                                     border: Border {
                                                         width: 1.0,
@@ -567,15 +590,9 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                                                         radius: 8.0.into(),
                                                     },
                                                     ..Default::default()
-                                                }
-                                            ),
-                                        ]
-                                        .spacing(4)
-                                        .width(Length::Fill)
-                                    } else {
-                                        row![container(name_element).width(Length::Fill).clip(true)]
-                                            .width(Length::Fill)
-                                    };
+                                                }),
+                                            );
+                                    }
                                     button(
                                         container(name_with_badge).width(Length::Fill).clip(true),
                                     )
