@@ -1,23 +1,128 @@
 use super::*;
-use crate::app::state::{App, Message, QuickOpenEntryKind};
+use crate::app::state::{
+    App, COMMAND_PALETTE_SCROLL_ID, Message, QUICK_OPEN_SCROLL_ID, QuickOpenEntryKind,
+};
 use iced::widget::{button, checkbox, container, row, scrollable, text, text_input};
 use iced::{Element, Length};
 
 pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
+    if app.command_palette_open {
+        let entries = app.command_palette_entries();
+        let input = text_input("Run a command", &app.command_palette_query)
+            .id("command-palette-input")
+            .on_input(Message::CommandPaletteQueryChanged)
+            .on_submit(Message::CommandPaletteSubmit)
+            .padding(6)
+            .size(14)
+            .style(|_, status| input_style(status))
+            .width(Length::Fill);
+        let mut list = iced::widget::column![].spacing(6).width(Length::Fill);
+
+        for (idx, entry) in entries.iter().enumerate() {
+            let is_selected = idx == app.command_palette_selected_index;
+            let title = entry.title.clone();
+            let detail = entry.detail.clone();
+            let badge_text = if is_selected {
+                rgb(255, 255, 255)
+            } else {
+                rgb(145, 152, 165)
+            };
+            let badge_bg = if is_selected {
+                Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 0.18,
+                }
+            } else {
+                rgb(35, 40, 50)
+            };
+
+            list = list.push(
+                button(
+                    row![
+                        container(text("CMD").size(10).color(badge_text))
+                            .padding([1, 5])
+                            .style(move |_| ContainerStyle {
+                                background: Some(Background::Color(badge_bg)),
+                                border: Border {
+                                    width: 0.0,
+                                    color: Color::TRANSPARENT,
+                                    radius: 3.0.into(),
+                                },
+                                ..Default::default()
+                            }),
+                        iced::widget::column![
+                            text(title).size(13),
+                            text(detail).size(11).color(rgb(138, 144, 156)),
+                        ]
+                        .spacing(2)
+                    ]
+                    .spacing(8),
+                )
+                .width(Length::Fill)
+                .padding([6, 6])
+                .style(move |_, status| {
+                    if is_selected {
+                        selected_entry_style(status)
+                    } else {
+                        tree_icon_button_style(status)
+                    }
+                })
+                .on_press(Message::CommandPaletteSelect(idx)),
+            );
+        }
+
+        if entries.is_empty() {
+            list = list.push(container(text("No matching commands").size(12)).padding([4, 2]));
+        }
+
+        let panel = container(
+            iced::widget::column![
+                row![
+                    text("Command Palette").size(16),
+                    button(text("Close").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::OpenCommandPalette(false)),
+                ]
+                .spacing(8),
+                text("Enter: run command")
+                    .size(11)
+                    .color(rgb(138, 144, 156)),
+                input,
+                scrollable(list)
+                    .id(COMMAND_PALETTE_SCROLL_ID)
+                    .height(Length::Fill),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fixed(560.0))
+        .height(Length::Fixed(420.0))
+        .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
     if app.quick_open_open {
         let entries = app.quick_open_entries();
-        let mut list = iced::widget::column![
-            text_input("Search terminal", &app.quick_open_query)
-                .id("quick-open-input")
-                .on_input(Message::QuickOpenQueryChanged)
-                .on_submit(Message::QuickOpenSubmit)
-                .padding(6)
-                .size(14)
-                .style(|_, status| input_style(status))
-                .width(Length::Fill)
-        ]
-        .spacing(6)
-        .width(Length::Fill);
+        let input = text_input("Search terminal", &app.quick_open_query)
+            .id("quick-open-input")
+            .on_input(Message::QuickOpenQueryChanged)
+            .on_submit(Message::QuickOpenSubmit)
+            .padding(6)
+            .size(14)
+            .style(|_, status| input_style(status))
+            .width(Length::Fill);
+        let mut list = iced::widget::column![].spacing(6).width(Length::Fill);
 
         let mut create_header_shown = false;
         for (idx, entry) in entries.iter().enumerate() {
@@ -120,7 +225,10 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 text("Enter: open terminal or create in selected worktree")
                     .size(11)
                     .color(rgb(138, 144, 156)),
-                scrollable(list).height(Length::Fill),
+                input,
+                scrollable(list)
+                    .id(QUICK_OPEN_SCROLL_ID)
+                    .height(Length::Fill),
             ]
             .spacing(8),
         )
@@ -312,6 +420,7 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 text("Cmd+Shift+T: New detached terminal").size(12),
                 text("Cmd+W: Close active terminal").size(12),
                 text("Cmd+P: Quick open").size(12),
+                text("Cmd+Shift+P: Command palette").size(12),
                 text("Cmd+Option+Shift+O: Toggle app focus").size(12),
                 text("Quick Open: Cmd+Backspace closes selected terminal").size(12),
                 container(text("Cmd+B: New browser").size(12)).style(move |_| ContainerStyle {

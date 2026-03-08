@@ -1,5 +1,9 @@
 use super::state::{App, Message};
-use crate::app::state::{QuickOpenEntry, QuickOpenEntryKind};
+use crate::app::shortcuts::ShortcutAction;
+use crate::app::state::{
+    COMMAND_PALETTE_SCROLL_ID, CommandPaletteAction, QUICK_OPEN_SCROLL_ID, QuickOpenEntry,
+    QuickOpenEntryKind,
+};
 use crate::ghostty_embed::{disable_system_hide_shortcuts, register_focus_toggle_hotkey};
 use iced::{Task, widget::operation, window};
 use std::time::Instant;
@@ -259,6 +263,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::OpenPreferences(open) => {
             app.preferences_open = open;
             if open {
+                app.command_palette_open = false;
                 app.quick_open_open = false;
                 app.rename_dialog = None;
                 app.add_worktree_dialog = None;
@@ -267,12 +272,70 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.sync_runtime_views();
             Task::none()
         }
+        Message::OpenCommandPalette(open) => {
+            app.command_palette_open = open;
+            if open {
+                app.command_palette_query.clear();
+                app.command_palette_selected_index = 0;
+                app.quick_open_open = false;
+                app.preferences_open = false;
+                app.rename_dialog = None;
+                app.add_worktree_dialog = None;
+                app.worktree_context_menu = None;
+            }
+            app.sync_runtime_views();
+            if open {
+                Task::batch([
+                    operation::focus("command-palette-input"),
+                    operation::move_cursor_to_end("command-palette-input"),
+                    operation::snap_to(COMMAND_PALETTE_SCROLL_ID, operation::RelativeOffset::START),
+                ])
+            } else {
+                Task::none()
+            }
+        }
+        Message::CommandPaletteQueryChanged(value) => {
+            if app.command_palette_open && app.keyboard_modifiers.logo() {
+                return Task::none();
+            }
+            app.command_palette_query = value;
+            app.command_palette_selected_index = 0;
+            operation::snap_to(COMMAND_PALETTE_SCROLL_ID, operation::RelativeOffset::START)
+        }
+        Message::CommandPaletteSubmit => {
+            let entries = app.command_palette_entries();
+            let Some(entry) = entries.get(app.command_palette_selected_index) else {
+                return Task::none();
+            };
+
+            let action = entry.action.clone();
+            app.command_palette_open = false;
+            app.command_palette_query.clear();
+            app.command_palette_selected_index = 0;
+            app.sync_runtime_views();
+            Task::done(Message::RunCommandPaletteAction(action))
+        }
+        Message::CommandPaletteSelect(index) => {
+            let entries = app.command_palette_entries();
+            let Some(entry) = entries.get(index) else {
+                return Task::none();
+            };
+
+            let action = entry.action.clone();
+            app.command_palette_open = false;
+            app.command_palette_query.clear();
+            app.command_palette_selected_index = 0;
+            app.sync_runtime_views();
+            Task::done(Message::RunCommandPaletteAction(action))
+        }
+        Message::RunCommandPaletteAction(action) => activate_command_palette_action(app, action),
         Message::OpenQuickOpen(open) => {
             app.quick_open_open = open;
             if open {
                 app.quick_open_query.clear();
                 app.quick_open_selected_index = 0;
                 app.quick_open_ignore_next_query_change = false;
+                app.command_palette_open = false;
                 app.preferences_open = false;
                 app.rename_dialog = None;
                 app.add_worktree_dialog = None;
@@ -283,6 +346,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 Task::batch([
                     operation::focus("quick-open-input"),
                     operation::move_cursor_to_end("quick-open-input"),
+                    operation::snap_to(QUICK_OPEN_SCROLL_ID, operation::RelativeOffset::START),
                 ])
             } else {
                 Task::none()
@@ -298,7 +362,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
             app.quick_open_query = value;
             app.quick_open_selected_index = 0; // Reset selection when query changes
-            Task::none()
+            operation::snap_to(QUICK_OPEN_SCROLL_ID, operation::RelativeOffset::START)
         }
         Message::QuickOpenSubmit => {
             let entries = app.quick_open_entries();
@@ -352,6 +416,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             worktree_id,
         } => {
             app.start_rename_worktree(&project_id, &worktree_id);
+            app.command_palette_open = false;
             app.quick_open_open = false;
             app.preferences_open = false;
             app.add_worktree_dialog = None;
@@ -368,6 +433,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::StartRenameFocused => {
             app.start_rename_focused();
+            app.command_palette_open = false;
             app.quick_open_open = false;
             app.preferences_open = false;
             app.add_worktree_dialog = None;
@@ -384,6 +450,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::StartRenameTerminal => {
             app.start_rename_active_terminal();
+            app.command_palette_open = false;
             app.quick_open_open = false;
             app.preferences_open = false;
             app.add_worktree_dialog = None;
@@ -420,6 +487,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::StartAddWorktree(project_id) => {
             app.start_add_worktree(&project_id);
+            app.command_palette_open = false;
             app.quick_open_open = false;
             app.preferences_open = false;
             app.rename_dialog = None;
@@ -639,5 +707,63 @@ fn activate_quick_open_entry(app: &mut App, entry: &QuickOpenEntry) -> bool {
             );
             true
         }
+    }
+}
+
+fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) -> Task<Message> {
+    match action {
+        CommandPaletteAction::OpenQuickOpen => update(app, Message::OpenQuickOpen(true)),
+        CommandPaletteAction::ToggleSidebar => update(app, Message::ToggleSidebar),
+        CommandPaletteAction::NewTerminal => {
+            input::apply_shortcut(app, ShortcutAction::NewTerminal)
+        }
+        CommandPaletteAction::NewDetachedTerminal => update(app, Message::AddDetachedTerminal),
+        CommandPaletteAction::CloseActiveTerminal => update(app, Message::CloseActiveTerminal),
+        CommandPaletteAction::RenameFocused => update(app, Message::StartRenameFocused),
+        CommandPaletteAction::RenameTerminal => update(app, Message::StartRenameTerminal),
+        CommandPaletteAction::RenameWorktree => {
+            let Some((project_id, worktree_id)) = app.active_worktree_ids() else {
+                app.status = String::from("No active worktree to rename");
+                return Task::none();
+            };
+            update(
+                app,
+                Message::StartRenameWorktree {
+                    project_id,
+                    worktree_id,
+                },
+            )
+        }
+        CommandPaletteAction::OpenPreferences => update(app, Message::OpenPreferences(true)),
+        CommandPaletteAction::AddProject => update(app, Message::AddProject),
+        CommandPaletteAction::AddWorktreeToActiveProject => {
+            let Some(project_id) = app.persisted.active_project_id.clone() else {
+                app.status = String::from("No active project to add a worktree to");
+                return Task::none();
+            };
+            update(app, Message::StartAddWorktree(project_id))
+        }
+        CommandPaletteAction::RescanActiveProject => {
+            let Some(project_id) = app.persisted.active_project_id.clone() else {
+                app.status = String::from("No active project to rescan");
+                return Task::none();
+            };
+            update(app, Message::ProjectRescan(project_id))
+        }
+        CommandPaletteAction::ToggleBrowsers => update(
+            app,
+            Message::SetEnableBrowsers(!app.persisted.ui.enable_browsers),
+        ),
+        CommandPaletteAction::AddBrowser => update(app, Message::AddBrowser),
+        CommandPaletteAction::BrowserDevTools => update(app, Message::BrowserDevTools),
+        CommandPaletteAction::FontIncrease => {
+            input::apply_shortcut(app, ShortcutAction::FontIncrease)
+        }
+        CommandPaletteAction::FontDecrease => {
+            input::apply_shortcut(app, ShortcutAction::FontDecrease)
+        }
+        CommandPaletteAction::FontReset => input::apply_shortcut(app, ShortcutAction::FontReset),
+        CommandPaletteAction::NextTerminal => update(app, Message::SwitchTerminalByOffset(1)),
+        CommandPaletteAction::PreviousTerminal => update(app, Message::SwitchTerminalByOffset(-1)),
     }
 }

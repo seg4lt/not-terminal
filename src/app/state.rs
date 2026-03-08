@@ -40,6 +40,8 @@ pub enum TerminalStatus {
 pub(crate) const SIDEBAR_WIDTH_MIN: f32 = 150.0;
 pub(crate) const SIDEBAR_WIDTH_MAX: f32 = 500.0;
 pub(crate) const SIDEBAR_WIDTH_DEFAULT: f32 = 248.0;
+pub(crate) const COMMAND_PALETTE_SCROLL_ID: &str = "command-palette-scroll";
+pub(crate) const QUICK_OPEN_SCROLL_ID: &str = "quick-open-scroll";
 const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
 
 /// Represents the different states of the sidebar
@@ -131,6 +133,38 @@ pub(crate) struct QuickOpenEntry {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) enum CommandPaletteAction {
+    OpenQuickOpen,
+    ToggleSidebar,
+    NewTerminal,
+    NewDetachedTerminal,
+    CloseActiveTerminal,
+    RenameFocused,
+    RenameTerminal,
+    RenameWorktree,
+    OpenPreferences,
+    AddProject,
+    AddWorktreeToActiveProject,
+    RescanActiveProject,
+    ToggleBrowsers,
+    AddBrowser,
+    BrowserDevTools,
+    FontIncrease,
+    FontDecrease,
+    FontReset,
+    NextTerminal,
+    PreviousTerminal,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CommandPaletteEntry {
+    pub(crate) title: String,
+    pub(crate) detail: String,
+    pub(crate) search_text: String,
+    pub(crate) action: CommandPaletteAction,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct TerminalLocator {
     pub(crate) project_idx: usize,
     pub(crate) worktree_idx: usize,
@@ -163,6 +197,9 @@ pub(crate) struct App {
     pub(crate) sidebar_resizing: bool,
     pub(crate) show_native_title_bar: bool,
     pub(crate) preferences_open: bool,
+    pub(crate) command_palette_open: bool,
+    pub(crate) command_palette_query: String,
+    pub(crate) command_palette_selected_index: usize,
     pub(crate) quick_open_open: bool,
     pub(crate) quick_open_query: String,
     pub(crate) quick_open_selected_index: usize,
@@ -234,6 +271,11 @@ pub(crate) enum Message {
     },
     RemoveDetachedTerminal(String),
     OpenPreferences(bool),
+    OpenCommandPalette(bool),
+    CommandPaletteQueryChanged(String),
+    CommandPaletteSubmit,
+    CommandPaletteSelect(usize),
+    RunCommandPaletteAction(CommandPaletteAction),
     OpenQuickOpen(bool),
     QuickOpenQueryChanged(String),
     QuickOpenSubmit,
@@ -306,6 +348,9 @@ impl App {
             sidebar_resizing: false,
             show_native_title_bar: crate::app::initial_show_native_title_bar(),
             preferences_open: false,
+            command_palette_open: false,
+            command_palette_query: String::new(),
+            command_palette_selected_index: 0,
             quick_open_open: false,
             quick_open_query: String::new(),
             quick_open_selected_index: 0,
@@ -841,6 +886,181 @@ impl App {
         entries
     }
 
+    pub(crate) fn command_palette_entries(&self) -> Vec<CommandPaletteEntry> {
+        let query = self.command_palette_query.trim().to_lowercase();
+        let search_terms: Vec<&str> = if query.is_empty() {
+            Vec::new()
+        } else {
+            query.split_whitespace().collect()
+        };
+
+        let active_project = self.active_project();
+        let active_project_label = active_project
+            .map(|project| project.name.clone())
+            .unwrap_or_else(|| String::from("No active project"));
+        let active_worktree_label = self
+            .active_worktree_ids()
+            .and_then(|(_, worktree_id)| {
+                self.persisted.projects.iter().find_map(|project| {
+                    project
+                        .worktrees
+                        .iter()
+                        .find(|worktree| worktree.id == worktree_id)
+                        .map(|worktree| format!("{} / {}", project.name, worktree.name))
+                })
+            })
+            .unwrap_or_else(|| String::from("the active worktree"));
+        let active_browser_label = self
+            .active_browser()
+            .map(|browser| browser.name.clone())
+            .unwrap_or_else(|| String::from("browser"));
+
+        let mut entries = vec![
+            command_palette_entry(
+                CommandPaletteAction::OpenQuickOpen,
+                "Quick Open",
+                "Search terminals and worktrees • Cmd+P",
+                "terminal worktree switch search open",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::ToggleSidebar,
+                "Toggle Sidebar",
+                "Show or hide the sidebar • Cmd+1",
+                "sidebar layout panel",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::NewTerminal,
+                format!("New Terminal in {active_worktree_label}"),
+                "Create a terminal in the active worktree • Cmd+T",
+                "terminal shell tab create worktree",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::NewDetachedTerminal,
+                "New Detached Terminal",
+                "Create a standalone terminal • Cmd+Shift+T",
+                "terminal detached floating create",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::CloseActiveTerminal,
+                "Close Active Terminal",
+                "Close the currently selected terminal • Cmd+W",
+                "terminal close kill remove",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::RenameFocused,
+                "Rename Focused Item",
+                "Rename the active terminal or worktree • F2",
+                "rename terminal worktree focused edit",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::RenameTerminal,
+                "Rename Active Terminal",
+                "Rename just the active terminal • Cmd+R",
+                "rename terminal title",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::RenameWorktree,
+                format!("Rename Worktree in {active_worktree_label}"),
+                "Rename the active worktree",
+                "rename worktree branch project folder",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::OpenPreferences,
+                "Open Preferences",
+                "Show application settings • Cmd+,",
+                "preferences settings configuration",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::AddProject,
+                "Add Project",
+                "Import a Git folder into the sidebar",
+                "project repository repo add open folder",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::ToggleBrowsers,
+                if self.persisted.ui.enable_browsers {
+                    "Disable Browsers"
+                } else {
+                    "Enable Browsers"
+                },
+                "Toggle the embedded browser feature",
+                "browser webview toggle preferences",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::FontIncrease,
+                "Increase Terminal Font Size",
+                "Grow the active terminal font • Cmd+=",
+                "font zoom in increase terminal",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::FontDecrease,
+                "Decrease Terminal Font Size",
+                "Shrink the active terminal font • Cmd+-",
+                "font zoom out decrease terminal",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::FontReset,
+                "Reset Terminal Font Size",
+                "Restore the default terminal font size • Cmd+0",
+                "font zoom reset terminal",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::NextTerminal,
+                "Next Terminal",
+                "Move to the next terminal in the global sequence • Cmd+Shift+]",
+                "terminal next cycle switch",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::PreviousTerminal,
+                "Previous Terminal",
+                "Move to the previous terminal in the global sequence • Cmd+Shift+[",
+                "terminal previous cycle switch",
+            ),
+        ];
+
+        if active_project.is_some() {
+            entries.push(command_palette_entry(
+                CommandPaletteAction::AddWorktreeToActiveProject,
+                format!("Add Worktree to {active_project_label}"),
+                "Create a new worktree for the active project",
+                "worktree branch create project",
+            ));
+            entries.push(command_palette_entry(
+                CommandPaletteAction::RescanActiveProject,
+                format!("Rescan {active_project_label}"),
+                "Refresh the active project's worktree list",
+                "rescan refresh project worktree git",
+            ));
+        }
+
+        if self.persisted.ui.enable_browsers {
+            entries.push(command_palette_entry(
+                CommandPaletteAction::AddBrowser,
+                "New Browser",
+                "Create an embedded browser • Cmd+B",
+                "browser webview new create",
+            ));
+            entries.push(command_palette_entry(
+                CommandPaletteAction::BrowserDevTools,
+                format!("Open DevTools for {active_browser_label}"),
+                "Open Web Inspector for the active browser • Cmd+Option+I",
+                "browser devtools inspector webview",
+            ));
+        }
+
+        if search_terms.is_empty() {
+            return entries;
+        }
+
+        entries
+            .into_iter()
+            .filter(|entry| {
+                let haystack = entry.search_text.to_lowercase();
+                search_terms.iter().all(|term| haystack.contains(term))
+            })
+            .collect()
+    }
+
     pub(crate) fn filtered_project_indices(&self) -> Vec<usize> {
         let query = self.filter_query.trim().to_lowercase();
         if query.is_empty() {
@@ -1110,7 +1330,8 @@ impl App {
     }
 
     pub(crate) fn modal_open(&self) -> bool {
-        self.quick_open_open
+        self.command_palette_open
+            || self.quick_open_open
             || self.preferences_open
             || self.rename_dialog.is_some()
             || self.add_worktree_dialog.is_some()
@@ -1385,4 +1606,21 @@ fn sanitize_branch_component(value: &str) -> String {
         })
         .collect();
     filtered.trim_matches('-').to_string()
+}
+
+fn command_palette_entry(
+    action: CommandPaletteAction,
+    title: impl Into<String>,
+    detail: impl Into<String>,
+    search_terms: &str,
+) -> CommandPaletteEntry {
+    let title = title.into();
+    let detail = detail.into();
+    let search_text = format!("{title} {detail} {search_terms}");
+    CommandPaletteEntry {
+        title,
+        detail,
+        search_text,
+        action,
+    }
 }

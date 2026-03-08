@@ -1,5 +1,8 @@
 use crate::app::shortcuts::{ShortcutAction, detect_shortcut};
-use crate::app::state::{App, Message, QuickOpenEntryKind, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN};
+use crate::app::state::{
+    App, COMMAND_PALETTE_SCROLL_ID, Message, QUICK_OPEN_SCROLL_ID, QuickOpenEntryKind,
+    SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN,
+};
 use iced::{Task, keyboard, mouse, widget::operation};
 use std::time::Instant;
 
@@ -37,7 +40,8 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
             | ShortcutAction::ModalFocusNext
             | ShortcutAction::ModalFocusPrevious
             | ShortcutAction::ModalCloseQuickOpenTerminal
-            | ShortcutAction::OpenQuickOpen),
+            | ShortcutAction::OpenQuickOpen
+            | ShortcutAction::OpenCommandPalette),
         ) = shortcut_action
         {
             return apply_shortcut(app, action);
@@ -53,6 +57,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
                 | ShortcutAction::NewDetachedTerminal
                 | ShortcutAction::CloseActiveTerminal
                 | ShortcutAction::OpenQuickOpen
+                | ShortcutAction::OpenCommandPalette
                 | ShortcutAction::OpenPreferences
                 | ShortcutAction::AddBrowser
                 | ShortcutAction::BrowserDevTools
@@ -246,7 +251,7 @@ pub(super) fn handle_mouse(app: &mut App, event: mouse::Event) -> Task<Message> 
     }
 }
 
-fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
+pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
     match action {
         ShortcutAction::ToggleSidebar => super::update(app, Message::ToggleSidebar),
         ShortcutAction::NewTerminal => {
@@ -267,6 +272,9 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
         ShortcutAction::CloseActiveTerminal => super::update(app, Message::CloseActiveTerminal),
         ShortcutAction::OpenQuickOpen => {
             super::update(app, Message::OpenQuickOpen(!app.quick_open_open))
+        }
+        ShortcutAction::OpenCommandPalette => {
+            super::update(app, Message::OpenCommandPalette(!app.command_palette_open))
         }
         ShortcutAction::OpenPreferences => super::update(app, Message::OpenPreferences(true)),
         ShortcutAction::AddBrowser => super::update(app, Message::AddBrowser),
@@ -313,6 +321,9 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             if app.quick_open_open {
                 return super::update(app, Message::OpenQuickOpen(false));
             }
+            if app.command_palette_open {
+                return super::update(app, Message::OpenCommandPalette(false));
+            }
             if app.preferences_open {
                 return super::update(app, Message::OpenPreferences(false));
             }
@@ -326,6 +337,9 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             if app.add_worktree_dialog.is_some() {
                 return super::update(app, Message::AddWorktreeCommit);
             }
+            if app.command_palette_open {
+                return super::update(app, Message::CommandPaletteSubmit);
+            }
             if app.quick_open_open {
                 return super::update(app, Message::QuickOpenSubmit);
             }
@@ -333,20 +347,51 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
         }
         ShortcutAction::ModalFocusNext => {
             app.suppress_next_key_release = true;
-            if app.quick_open_open {
+            if app.command_palette_open {
+                let entries = app.command_palette_entries();
+                if !entries.is_empty() {
+                    app.command_palette_selected_index =
+                        (app.command_palette_selected_index + 1) % entries.len();
+                }
+                modal_selection_scroll_task(
+                    COMMAND_PALETTE_SCROLL_ID,
+                    app.command_palette_selected_index,
+                    entries.len(),
+                )
+            } else if app.quick_open_open {
                 let entries = app.quick_open_entries();
                 if !entries.is_empty() {
                     app.quick_open_selected_index =
                         (app.quick_open_selected_index + 1) % entries.len();
                 }
-                Task::none()
+                modal_selection_scroll_task(
+                    QUICK_OPEN_SCROLL_ID,
+                    app.quick_open_selected_index,
+                    entries.len(),
+                )
             } else {
                 operation::focus_next()
             }
         }
         ShortcutAction::ModalFocusPrevious => {
             app.suppress_next_key_release = true;
-            if app.quick_open_open {
+            if app.command_palette_open {
+                let entries = app.command_palette_entries();
+                if !entries.is_empty() {
+                    let count = entries.len();
+                    app.command_palette_selected_index = if app.command_palette_selected_index == 0
+                    {
+                        count - 1
+                    } else {
+                        app.command_palette_selected_index - 1
+                    };
+                }
+                modal_selection_scroll_task(
+                    COMMAND_PALETTE_SCROLL_ID,
+                    app.command_palette_selected_index,
+                    entries.len(),
+                )
+            } else if app.quick_open_open {
                 let entries = app.quick_open_entries();
                 if !entries.is_empty() {
                     let count = entries.len();
@@ -356,7 +401,11 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
                         app.quick_open_selected_index - 1
                     };
                 }
-                Task::none()
+                modal_selection_scroll_task(
+                    QUICK_OPEN_SCROLL_ID,
+                    app.quick_open_selected_index,
+                    entries.len(),
+                )
             } else {
                 operation::focus_previous()
             }
@@ -379,4 +428,18 @@ fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Message> {
             }
         }
     }
+}
+
+fn modal_selection_scroll_task(
+    scroll_id: &'static str,
+    selected_index: usize,
+    entry_count: usize,
+) -> Task<Message> {
+    let y = if entry_count <= 1 {
+        0.0
+    } else {
+        selected_index as f32 / (entry_count - 1) as f32
+    };
+
+    operation::snap_to(scroll_id, operation::RelativeOffset { x: 0.0, y })
 }

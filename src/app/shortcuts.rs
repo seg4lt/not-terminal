@@ -8,6 +8,7 @@ pub(crate) enum ShortcutAction {
     NewDetachedTerminal,
     CloseActiveTerminal,
     OpenQuickOpen,
+    OpenCommandPalette,
     OpenPreferences,
     AddBrowser,
     BrowserDevTools,
@@ -107,6 +108,10 @@ pub(crate) fn detect_shortcut(
     }
 
     if modifiers.shift() && !modifiers.alt() {
+        if is_key_p(key_char.as_deref(), physical_key) {
+            return Some(ShortcutAction::OpenCommandPalette);
+        }
+
         if is_key_t(key_char.as_deref(), physical_key) {
             return Some(ShortcutAction::NewDetachedTerminal);
         }
