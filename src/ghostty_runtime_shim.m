@@ -27,12 +27,14 @@ typedef enum rust_ghostty_action_tag_e {
   RUST_GHOSTTY_ACTION_RING_BELL = 9,
   RUST_GHOSTTY_ACTION_SET_TITLE = 10,
   RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION = 11,
+  RUST_GHOSTTY_ACTION_PROGRESS_REPORT = 12,
 } rust_ghostty_action_tag_t;
 
 typedef struct rust_ghostty_action_event_s {
   uint32_t tag;
   uintptr_t surface;
   int32_t arg0;
+  int32_t arg1;
   uint16_t amount;
   uint16_t reserved;
   uintptr_t ptr;  // For passing pointers (e.g., title strings)
@@ -106,6 +108,7 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
       .tag = RUST_GHOSTTY_ACTION_NONE,
       .surface = surface_ptr,
       .arg0 = 0,
+      .arg1 = 0,
       .amount = 0,
       .reserved = 0,
   };
@@ -160,6 +163,12 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
     }
     case GHOSTTY_ACTION_DESKTOP_NOTIFICATION: {
       action_event.tag = RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION;
+      break;
+    }
+    case GHOSTTY_ACTION_PROGRESS_REPORT: {
+      action_event.tag = RUST_GHOSTTY_ACTION_PROGRESS_REPORT;
+      action_event.arg0 = (int32_t)action.action.progress_report.state;
+      action_event.arg1 = (int32_t)action.action.progress_report.progress;
       break;
     }
     default:

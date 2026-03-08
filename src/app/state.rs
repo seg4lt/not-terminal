@@ -7,7 +7,8 @@ use crate::app::model::{
 use crate::app::persistence;
 use crate::app::runtime::{PaneRuntime, RuntimeSession};
 use crate::ghostty_embed::{
-    GhosttyEmbed, GhosttyRuntimeAction, host_view_free, host_view_new, ns_view_ptr,
+    GhosttyEmbed, GhosttyProgressReportState, GhosttyRuntimeAction, host_view_free, host_view_new,
+    ns_view_ptr,
 };
 use crate::webview::WebView;
 use iced::{
@@ -178,8 +179,12 @@ pub(crate) struct App {
     pub(crate) terminal_status: HashMap<String, TerminalStatus>,
     /// Terminals that have rung the bell (awaiting user input)
     pub(crate) terminal_awaiting_response: HashSet<String>,
+    /// Terminals currently reporting explicit progress via Ghostty OSC progress.
+    pub(crate) terminal_progress_active: HashSet<String>,
     /// Stores title per terminal_id for bell detection via title emoji
     pub(crate) terminal_titles: HashMap<String, String>,
+    /// Animation frame for active terminal progress indicators.
+    pub(crate) terminal_activity_frame: usize,
     /// Browser webviews by ID
     pub(crate) browser_webviews: HashMap<String, WebView>,
 }
@@ -315,7 +320,9 @@ impl App {
             last_ghostty_activity: Instant::now(),
             terminal_status: HashMap::new(),
             terminal_awaiting_response: HashSet::new(),
+            terminal_progress_active: HashSet::new(),
             terminal_titles: HashMap::new(),
+            terminal_activity_frame: 0,
             browser_webviews: HashMap::new(),
         };
 
@@ -343,18 +350,22 @@ impl App {
         ];
 
         if !self.runtimes.is_empty() {
-            let time_since_activity = self.last_ghostty_activity.elapsed();
-
-            let cadence = if time_since_activity > Duration::from_secs(30) {
-                Duration::from_secs(2)
-            } else if time_since_activity > Duration::from_secs(10) {
-                Duration::from_millis(500)
-            } else if time_since_activity > Duration::from_secs(3) {
-                Duration::from_millis(100)
-            } else if time_since_activity > Duration::from_millis(500) {
-                Duration::from_millis(33)
+            let cadence = if !self.terminal_progress_active.is_empty() {
+                Duration::from_millis(120)
             } else {
-                Duration::from_millis(16)
+                let time_since_activity = self.last_ghostty_activity.elapsed();
+
+                if time_since_activity > Duration::from_secs(30) {
+                    Duration::from_secs(2)
+                } else if time_since_activity > Duration::from_secs(10) {
+                    Duration::from_millis(500)
+                } else if time_since_activity > Duration::from_secs(3) {
+                    Duration::from_millis(100)
+                } else if time_since_activity > Duration::from_millis(500) {
+                    Duration::from_millis(33)
+                } else {
+                    Duration::from_millis(16)
+                }
             };
 
             subscriptions.push(time::every(cadence).map(|_| Message::GhosttyTick));
@@ -1043,6 +1054,7 @@ impl App {
                         false
                     }
                     GhosttyRuntimeAction::CommandFinished { exit_code, .. } => {
+                        self.set_terminal_progress_active(&terminal_id, false);
                         // Set the terminal status based on exit code
                         // BUT don't override AwaitingResponse state - bell takes precedence
                         let current_status = self.get_terminal_status(&terminal_id);
@@ -1072,6 +1084,15 @@ impl App {
                         // Mark as awaiting response
                         self.on_terminal_bell(terminal_id.clone());
                         true // Trigger UI update
+                    }
+                    GhosttyRuntimeAction::ProgressReport { state, .. } => {
+                        let active = matches!(
+                            state,
+                            GhosttyProgressReportState::Set
+                                | GhosttyProgressReportState::Indeterminate
+                        );
+                        self.set_terminal_progress_active(&terminal_id, active);
+                        true
                     }
                 };
 

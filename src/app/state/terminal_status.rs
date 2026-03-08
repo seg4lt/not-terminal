@@ -1,6 +1,23 @@
 use super::*;
 
 impl App {
+    pub(crate) fn set_terminal_progress_active(&mut self, terminal_id: &str, active: bool) {
+        if active {
+            self.terminal_progress_active
+                .insert(terminal_id.to_string());
+        } else {
+            self.terminal_progress_active.remove(terminal_id);
+        }
+    }
+
+    pub(crate) fn is_terminal_progress_active(&self, terminal_id: &str) -> bool {
+        self.terminal_progress_active.contains(terminal_id)
+    }
+
+    pub(crate) fn advance_terminal_activity_frame(&mut self) {
+        self.terminal_activity_frame = (self.terminal_activity_frame + 1) % 4;
+    }
+
     pub(crate) fn terminal_exists(&self, terminal_id: &str) -> bool {
         self.find_terminal_locator(terminal_id).is_some()
             || self
@@ -49,6 +66,7 @@ impl App {
     pub(crate) fn remove_terminal_status(&mut self, terminal_id: &str) {
         self.terminal_status.remove(terminal_id);
         self.terminal_awaiting_response.remove(terminal_id);
+        self.terminal_progress_active.remove(terminal_id);
         self.terminal_titles.remove(terminal_id);
     }
 

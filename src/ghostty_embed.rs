@@ -24,6 +24,15 @@ pub enum GhosttyResizeSplitDirection {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyProgressReportState {
+    Remove,
+    Set,
+    Error,
+    Indeterminate,
+    Pause,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GhosttyRuntimeAction {
     NewSplit {
@@ -66,13 +75,18 @@ pub enum GhosttyRuntimeAction {
     DesktopNotification {
         surface_ptr: usize,
     },
+    ProgressReport {
+        surface_ptr: usize,
+        state: GhosttyProgressReportState,
+        progress: Option<u8>,
+    },
 }
 
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{
-        GhosttyGotoSplitDirection, GhosttyResizeSplitDirection, GhosttyRuntimeAction,
-        GhosttySplitDirection,
+        GhosttyGotoSplitDirection, GhosttyProgressReportState, GhosttyResizeSplitDirection,
+        GhosttyRuntimeAction, GhosttySplitDirection,
     };
     use iced::keyboard::key::{Code, Named, NativeCode, Physical};
     use iced::keyboard::{Event as KeyboardEvent, Key, Location, Modifiers};
@@ -108,6 +122,7 @@ mod macos {
         tag: u32,
         surface: usize,
         arg0: i32,
+        arg1: i32,
         amount: u16,
         reserved: u16,
         ptr: usize,            // For passing pointers (e.g., title strings)
@@ -120,6 +135,7 @@ mod macos {
                 tag: 0,
                 surface: 0,
                 arg0: 0,
+                arg1: 0,
                 amount: 0,
                 reserved: 0,
                 ptr: 0,
@@ -143,6 +159,13 @@ mod macos {
     const RUST_GHOSTTY_ACTION_RING_BELL: u32 = 9;
     const RUST_GHOSTTY_ACTION_SET_TITLE: u32 = 10;
     const RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION: u32 = 11;
+    const RUST_GHOSTTY_ACTION_PROGRESS_REPORT: u32 = 12;
+
+    const GHOSTTY_PROGRESS_STATE_REMOVE: i32 = 0;
+    const GHOSTTY_PROGRESS_STATE_SET: i32 = 1;
+    const GHOSTTY_PROGRESS_STATE_ERROR: i32 = 2;
+    const GHOSTTY_PROGRESS_STATE_INDETERMINATE: i32 = 3;
+    const GHOSTTY_PROGRESS_STATE_PAUSE: i32 = 4;
 
     const GHOSTTY_SPLIT_DIRECTION_RIGHT: i32 = 0;
     const GHOSTTY_SPLIT_DIRECTION_DOWN: i32 = 1;
@@ -896,6 +919,24 @@ mod macos {
             RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION => {
                 Some(GhosttyRuntimeAction::DesktopNotification {
                     surface_ptr: raw.surface,
+                })
+            }
+            RUST_GHOSTTY_ACTION_PROGRESS_REPORT => {
+                let state = match raw.arg0 {
+                    GHOSTTY_PROGRESS_STATE_REMOVE => GhosttyProgressReportState::Remove,
+                    GHOSTTY_PROGRESS_STATE_SET => GhosttyProgressReportState::Set,
+                    GHOSTTY_PROGRESS_STATE_ERROR => GhosttyProgressReportState::Error,
+                    GHOSTTY_PROGRESS_STATE_INDETERMINATE => {
+                        GhosttyProgressReportState::Indeterminate
+                    }
+                    GHOSTTY_PROGRESS_STATE_PAUSE => GhosttyProgressReportState::Pause,
+                    _ => return None,
+                };
+                let progress = u8::try_from(raw.arg1).ok().filter(|value| *value <= 100);
+                Some(GhosttyRuntimeAction::ProgressReport {
+                    surface_ptr: raw.surface,
+                    state,
+                    progress,
                 })
             }
             _ => None,

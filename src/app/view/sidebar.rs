@@ -5,6 +5,36 @@ use iced::widget::text::Wrapping;
 use iced::widget::{button, container, mouse_area, row, scrollable, text};
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
+fn terminal_working_frame(app: &App) -> &'static str {
+    const FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
+    FRAMES[app.terminal_activity_frame % FRAMES.len()]
+}
+
+fn terminal_working_badge(app: &App, terminal_id: &str) -> Option<Element<'static, Message>> {
+    if !app.is_terminal_progress_active(terminal_id) {
+        return None;
+    }
+
+    Some(
+        container(
+            text(terminal_working_frame(app))
+                .size(10)
+                .color(rgb(108, 214, 128)),
+        )
+        .padding([1, 4])
+        .style(|_| ContainerStyle {
+            background: Some(Background::Color(rgb(25, 43, 31))),
+            border: Border {
+                width: 1.0,
+                color: rgb(46, 82, 56),
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        })
+        .into(),
+    )
+}
+
 /// Get the status indicator symbol and color for a terminal
 fn terminal_status_indicator(
     app: &App,
@@ -178,6 +208,10 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                                         .padding([1, 4])
                                         .style(|_| subtle_badge_style()),
                                 );
+                            }
+
+                            if let Some(working_badge) = terminal_working_badge(app, &terminal_id) {
+                                name_with_badge = name_with_badge.push(working_badge);
                             }
 
                             if let TerminalStatus::Error(code) =
@@ -567,6 +601,12 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                                                 .padding([1, 4])
                                                 .style(|_| subtle_badge_style()),
                                         );
+                                    }
+
+                                    if let Some(working_badge) =
+                                        terminal_working_badge(app, &terminal_id)
+                                    {
+                                        name_with_badge = name_with_badge.push(working_badge);
                                     }
 
                                     if let TerminalStatus::Error(code) =

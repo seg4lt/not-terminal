@@ -84,7 +84,9 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
             for runtime in app.runtimes.values_mut() {
                 let tick = runtime.tick_all();
-                had_any_work |= tick.had_pending_work;
+                if tick.had_pending_work {
+                    had_any_work = true;
+                }
                 layout_changed |= tick.layout_changed;
             }
 
@@ -95,6 +97,9 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             // Update activity timestamp if there was actual work to do
             if had_any_work {
                 app.last_ghostty_activity = Instant::now();
+            }
+            if !app.terminal_progress_active.is_empty() {
+                app.advance_terminal_activity_frame();
             }
 
             Task::none()
