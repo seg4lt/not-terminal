@@ -414,11 +414,22 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                     .label("Enable browsers feature")
                     .on_toggle(Message::SetEnableBrowsers)
                     .text_size(13),
+                text("Preferred editor command").size(13),
+                text_input("zed", &app.persisted.ui.preferred_editor_command)
+                    .on_input(Message::SetPreferredEditorCommand)
+                    .padding(6)
+                    .size(13)
+                    .style(|_, status| input_style(status))
+                    .width(Length::Fill),
+                text("Examples: zed, code, idea")
+                    .size(11)
+                    .color(rgb(138, 144, 156)),
                 text("Shortcuts").size(14),
                 text("Cmd+1: Toggle sidebar").size(12),
                 text("Cmd+T: New terminal in active worktree").size(12),
                 text("Cmd+Shift+T: New detached terminal").size(12),
                 text("Cmd+W: Close active terminal").size(12),
+                text("Cmd+O: Open active worktree in preferred editor").size(12),
                 text("Cmd+P: Quick open").size(12),
                 text("Cmd+Shift+P: Command palette").size(12),
                 text("Cmd+Option+Shift+O: Toggle app focus").size(12),
@@ -443,7 +454,7 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
             .spacing(6),
         )
         .padding(12)
-        .width(Length::Fixed(460.0))
+        .width(Length::Fixed(500.0))
         .style(|_| modal_panel_style());
 
         return Some(

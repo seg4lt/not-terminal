@@ -241,6 +241,7 @@ pub(crate) enum Message {
     ToggleSidebar,
     SetShowNativeTitleBar(bool),
     SetEnableBrowsers(bool),
+    SetPreferredEditorCommand(String),
     FilterChanged(String),
     AddProject,
     ProjectRescan(String),
@@ -259,6 +260,7 @@ pub(crate) enum Message {
     },
     AddDetachedTerminal,
     CloseActiveTerminal,
+    OpenInPreferredEditor,
     SelectTerminal {
         project_id: String,
         terminal_id: String,
@@ -454,6 +456,7 @@ impl App {
             show_native_title_bar: self.show_native_title_bar,
             sidebar_width: self.sidebar_width,
             enable_browsers: self.persisted.ui.enable_browsers,
+            preferred_editor_command: self.persisted.ui.preferred_editor_command.clone(),
         };
 
         Task::perform(
@@ -718,6 +721,14 @@ impl App {
             terminal_id: terminal.id.clone(),
             worktree_path: Some(worktree.path.clone()),
         })
+    }
+
+    pub(crate) fn active_editor_target_path(&self) -> Option<String> {
+        if self.active_browser_id().is_some() {
+            return None;
+        }
+
+        self.active_terminal_context()?.worktree_path
     }
 
     pub(crate) fn terminal_has_splits(&self, terminal_id: &str) -> bool {

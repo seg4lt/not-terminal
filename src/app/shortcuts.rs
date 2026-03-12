@@ -7,6 +7,7 @@ pub(crate) enum ShortcutAction {
     NewTerminal,
     NewDetachedTerminal,
     CloseActiveTerminal,
+    OpenInPreferredEditor,
     OpenQuickOpen,
     OpenCommandPalette,
     OpenPreferences,
@@ -137,6 +138,10 @@ pub(crate) fn detect_shortcut(
         return Some(ShortcutAction::CloseActiveTerminal);
     }
 
+    if is_key_o(key_char.as_deref(), physical_key) && !modifiers.shift() {
+        return Some(ShortcutAction::OpenInPreferredEditor);
+    }
+
     if is_key_p(key_char.as_deref(), physical_key) && !modifiers.shift() {
         return Some(ShortcutAction::OpenQuickOpen);
     }
@@ -202,6 +207,10 @@ fn is_key_w(value: Option<&str>, physical: &Physical) -> bool {
 
 fn is_key_r(value: Option<&str>, physical: &Physical) -> bool {
     is_letter(value, "r") || matches!(physical, Physical::Code(Code::KeyR))
+}
+
+fn is_key_o(value: Option<&str>, physical: &Physical) -> bool {
+    is_letter(value, "o") || matches!(physical, Physical::Code(Code::KeyO))
 }
 
 fn is_key_b(value: Option<&str>, physical: &Physical) -> bool {

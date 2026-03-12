@@ -43,6 +43,8 @@ pub(crate) struct UiState {
     pub(crate) sidebar_width: f32,
     #[serde(default = "default_enable_browsers")]
     pub(crate) enable_browsers: bool,
+    #[serde(default)]
+    pub(crate) preferred_editor_command: String,
 }
 
 impl Default for UiState {
@@ -52,6 +54,7 @@ impl Default for UiState {
             show_native_title_bar: default_show_native_title_bar(),
             sidebar_width: default_sidebar_width(),
             enable_browsers: default_enable_browsers(),
+            preferred_editor_command: String::new(),
         }
     }
 }

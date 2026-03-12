@@ -8,6 +8,7 @@ use crate::ghostty_embed::{
     disable_system_hide_shortcuts, register_focus_toggle_hotkey, take_pending_attention_badge_click,
 };
 use iced::{Task, widget::operation, window};
+use std::process::{Command, Stdio};
 use std::time::Instant;
 
 mod browser;
@@ -137,6 +138,10 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.persisted.ui.enable_browsers = value;
             app.save_task()
         }
+        Message::SetPreferredEditorCommand(value) => {
+            app.persisted.ui.preferred_editor_command = value;
+            app.save_task()
+        }
         Message::FilterChanged(value) => {
             app.filter_query = value;
             Task::none()
@@ -232,6 +237,35 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             } else {
                 Task::none()
             }
+        }
+        Message::OpenInPreferredEditor => {
+            let editor_command = app.persisted.ui.preferred_editor_command.trim();
+            if editor_command.is_empty() {
+                app.status = String::from("Set a preferred editor command in Preferences");
+                return Task::none();
+            }
+
+            if editor_command.chars().any(char::is_whitespace) {
+                app.status =
+                    String::from("Preferred editor must be a single command like zed or code");
+                return Task::none();
+            }
+
+            let Some(target_path) = app.active_editor_target_path() else {
+                app.status = String::from("No active worktree folder to open");
+                return Task::none();
+            };
+
+            match open_in_preferred_editor(editor_command, &target_path) {
+                Ok(()) => {
+                    app.status = format!("Opened {} in {}", target_path, editor_command);
+                }
+                Err(error) => {
+                    app.status = format!("Failed to open editor: {error}");
+                }
+            }
+
+            Task::none()
         }
         Message::SelectTerminal {
             project_id,
@@ -774,4 +808,43 @@ fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) 
         CommandPaletteAction::NextTerminal => update(app, Message::SwitchTerminalByOffset(1)),
         CommandPaletteAction::PreviousTerminal => update(app, Message::SwitchTerminalByOffset(-1)),
     }
+}
+
+fn open_in_preferred_editor(editor_command: &str, target_path: &str) -> Result<(), String> {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| String::from("/bin/zsh"));
+
+    let output = Command::new(&shell)
+        .arg("-lc")
+        .arg("command -v -- \"$1\"")
+        .arg("not-terminal")
+        .arg(editor_command)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|error| format!("failed to resolve editor command via shell: {error}"))?;
+
+    if !output.status.success() {
+        return Err(format!("editor command not found: {}", editor_command));
+    }
+
+    let resolved_output = String::from_utf8_lossy(&output.stdout);
+    let resolved = resolved_output
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("editor command not found: {}", editor_command))?;
+
+    Command::new(resolved)
+        .arg(".")
+        .current_dir(target_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("could not launch {}: {}", editor_command, error))
 }
