@@ -55,6 +55,128 @@ typedef struct rust_ghostty_runtime_bundle_s {
   void *surface;  // Store surface pointer for clipboard callbacks
 } rust_ghostty_runtime_bundle_t;
 
+static atomic_bool rust_ghostty_attention_badge_clicked = false;
+
+@interface RustGhosttyAttentionBadgeTarget : NSObject
+- (void)handleAttentionBadgePress:(id)sender;
+@end
+
+static RustGhosttyAttentionBadgeTarget *rust_ghostty_attention_badge_target(void);
+
+@implementation RustGhosttyAttentionBadgeTarget
+- (void)handleAttentionBadgePress:(id)sender {
+  (void)sender;
+  atomic_store_explicit(&rust_ghostty_attention_badge_clicked, true, memory_order_release);
+}
+@end
+
+@interface RustGhosttyAttentionBadgeView : NSView {
+ @private
+  NSImageView *_iconView;
+  NSTextField *_countLabel;
+}
+- (void)setAttentionCount:(int32_t)count;
+- (NSSize)preferredBadgeSize;
+@end
+
+@implementation RustGhosttyAttentionBadgeView
+
+- (instancetype)initWithFrame:(NSRect)frame {
+  self = [super initWithFrame:frame];
+  if (self == nil) {
+    return nil;
+  }
+
+  [self setAutoresizingMask:NSViewNotSizable];
+  [self setWantsLayer:YES];
+  [[self layer] setCornerRadius:11.0];
+  [[self layer] setBorderWidth:1.0];
+  [[self layer] setMasksToBounds:YES];
+  [[self layer] setBackgroundColor:[[NSColor colorWithCalibratedRed:0.28 green:0.21 blue:0.08 alpha:0.9] CGColor]];
+  [[self layer] setBorderColor:[[NSColor colorWithCalibratedRed:0.72 green:0.56 blue:0.2 alpha:0.95] CGColor]];
+
+  _iconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+  [_iconView setImageScaling:NSImageScaleProportionallyDown];
+  [_iconView setAutoresizingMask:NSViewNotSizable];
+  if ([NSImage respondsToSelector:@selector(imageWithSystemSymbolName:accessibilityDescription:)]) {
+    NSImage *icon = [NSImage imageWithSystemSymbolName:@"bell.fill" accessibilityDescription:@"Notifications"];
+    if (icon != nil) {
+      NSImageSymbolConfiguration *config =
+          [NSImageSymbolConfiguration configurationWithPointSize:13.0
+                                                         weight:NSFontWeightSemibold
+                                                          scale:NSImageSymbolScaleSmall];
+      icon = [icon imageWithSymbolConfiguration:config];
+      [_iconView setImage:icon];
+      [_iconView setContentTintColor:[NSColor colorWithCalibratedRed:0.94 green:0.76 blue:0.24 alpha:0.98]];
+    }
+  }
+  [self addSubview:_iconView];
+
+  _countLabel = [[NSTextField labelWithString:@"0"] retain];
+  [_countLabel setFont:[NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold]];
+  [_countLabel setTextColor:[NSColor colorWithCalibratedRed:0.98 green:0.95 blue:0.88 alpha:0.98]];
+  [_countLabel setAlignment:NSTextAlignmentCenter];
+  [_countLabel setAutoresizingMask:NSViewNotSizable];
+  [self addSubview:_countLabel];
+
+  NSClickGestureRecognizer *click =
+      [[NSClickGestureRecognizer alloc] initWithTarget:rust_ghostty_attention_badge_target()
+                                                action:@selector(handleAttentionBadgePress:)];
+  if (click != nil) {
+    [self addGestureRecognizer:click];
+    [click release];
+  }
+
+  return self;
+}
+
+- (void)dealloc {
+  [_iconView release];
+  [_countLabel release];
+  [super dealloc];
+}
+
+- (void)setAttentionCount:(int32_t)count {
+  [_countLabel setStringValue:[NSString stringWithFormat:@"%d", count]];
+  [self setNeedsLayout:YES];
+}
+
+- (NSSize)preferredBadgeSize {
+  [_countLabel sizeToFit];
+  NSSize labelSize = [_countLabel fittingSize];
+  return NSMakeSize(MAX(62.0, ceil(labelSize.width) + 42.0), 32.0);
+}
+
+- (void)layout {
+  [super layout];
+
+  const CGFloat iconSize = 14.0;
+  const CGFloat gap = 8.0;
+  NSRect bounds = [self bounds];
+  [_countLabel sizeToFit];
+  NSSize labelSize = [_countLabel fittingSize];
+  CGFloat totalWidth = iconSize + gap + labelSize.width;
+  CGFloat startX = floor((NSWidth(bounds) - totalWidth) * 0.5);
+  CGFloat iconY = floor((NSHeight(bounds) - iconSize) * 0.5);
+  CGFloat labelY = floor((NSHeight(bounds) - labelSize.height) * 0.5);
+
+  [_iconView setFrame:NSMakeRect(startX, iconY, iconSize, iconSize)];
+  [_countLabel setFrame:NSMakeRect(startX + iconSize + gap,
+                                   labelY,
+                                   ceil(labelSize.width),
+                                   ceil(labelSize.height))];
+}
+
+@end
+
+static RustGhosttyAttentionBadgeTarget *rust_ghostty_attention_badge_target(void) {
+  static RustGhosttyAttentionBadgeTarget *target = nil;
+  if (target == nil) {
+    target = [[RustGhosttyAttentionBadgeTarget alloc] init];
+  }
+  return target;
+}
+
 static void rust_ghostty_wakeup_cb(void *userdata) {
   rust_ghostty_runtime_state_t *state = (rust_ghostty_runtime_state_t *)userdata;
   if (state == NULL) {
@@ -447,6 +569,7 @@ void *rust_ghostty_host_view_new(void *parent_ns_view) {
 }
 
 static const void *RUST_GHOSTTY_SPLIT_BADGE_KEY = &RUST_GHOSTTY_SPLIT_BADGE_KEY;
+static const void *RUST_GHOSTTY_ATTENTION_BADGE_KEY = &RUST_GHOSTTY_ATTENTION_BADGE_KEY;
 
 static NSTextField *rust_ghostty_split_badge_label(NSView *host, bool create_if_missing) {
   if (host == nil) {
@@ -482,6 +605,31 @@ static NSTextField *rust_ghostty_split_badge_label(NSView *host, bool create_if_
       RUST_GHOSTTY_SPLIT_BADGE_KEY,
       label,
       OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  return label;
+}
+
+static RustGhosttyAttentionBadgeView *rust_ghostty_attention_badge_label(NSView *parent, bool create_if_missing) {
+  if (parent == nil) {
+    return nil;
+  }
+
+  RustGhosttyAttentionBadgeView *existing =
+      (RustGhosttyAttentionBadgeView *)objc_getAssociatedObject(parent, RUST_GHOSTTY_ATTENTION_BADGE_KEY);
+  if (existing != nil || !create_if_missing) {
+    return existing;
+  }
+
+  RustGhosttyAttentionBadgeView *label = [[RustGhosttyAttentionBadgeView alloc] initWithFrame:NSZeroRect];
+  if (label == nil) {
+    return nil;
+  }
+
+  objc_setAssociatedObject(
+      parent,
+      RUST_GHOSTTY_ATTENTION_BADGE_KEY,
+      label,
+      OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  [label release];
   return label;
 }
 
@@ -538,6 +686,55 @@ void rust_ghostty_host_view_set_split_badge(void *host_ns_view,
                                     : [NSColor colorWithCalibratedWhite:0.55 alpha:0.55]
                                   CGColor]];
   [label setHidden:NO];
+}
+
+void rust_ghostty_parent_view_set_attention_badge(void *parent_ns_view,
+                                                  bool visible,
+                                                  int32_t count) {
+  if (parent_ns_view == NULL) {
+    return;
+  }
+
+  NSView *parent = (NSView *)parent_ns_view;
+  RustGhosttyAttentionBadgeView *label = rust_ghostty_attention_badge_label(parent, visible);
+  if (label == nil) {
+    return;
+  }
+
+  if (!visible || count <= 0) {
+    [label setHidden:YES];
+    if ([label superview] != nil) {
+      [label removeFromSuperview];
+    }
+    return;
+  }
+
+  [label setAttentionCount:count];
+
+  NSSize fit = [label preferredBadgeSize];
+  const CGFloat width = fit.width;
+  const CGFloat height = fit.height;
+  const CGFloat inset = 12.0;
+  NSRect bounds = [parent bounds];
+  CGFloat x = NSMaxX(bounds) - width - inset;
+  CGFloat y = [parent isFlipped]
+                  ? (NSMinY(bounds) + inset)
+                  : (NSMaxY(bounds) - height - inset);
+
+  if ([label superview] != parent) {
+    [parent addSubview:label positioned:NSWindowAbove relativeTo:nil];
+  } else {
+    [parent addSubview:label positioned:NSWindowAbove relativeTo:nil];
+  }
+
+  [label setFrame:NSMakeRect(x, y, width, height)];
+  [label setHidden:NO];
+}
+
+bool rust_ghostty_take_pending_attention_badge_click(void) {
+  return atomic_exchange_explicit(&rust_ghostty_attention_badge_clicked,
+                                  false,
+                                  memory_order_acq_rel);
 }
 
 void rust_ghostty_host_view_set_frame(void *host_ns_view,

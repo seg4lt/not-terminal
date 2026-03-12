@@ -4,7 +4,9 @@ use crate::app::state::{
     COMMAND_PALETTE_SCROLL_ID, CommandPaletteAction, QUICK_OPEN_SCROLL_ID, QuickOpenEntry,
     QuickOpenEntryKind,
 };
-use crate::ghostty_embed::{disable_system_hide_shortcuts, register_focus_toggle_hotkey};
+use crate::ghostty_embed::{
+    disable_system_hide_shortcuts, register_focus_toggle_hotkey, take_pending_attention_badge_click,
+};
 use iced::{Task, widget::operation, window};
 use std::time::Instant;
 
@@ -83,6 +85,12 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::GhosttyTick => {
+            if take_pending_attention_badge_click() && app.sidebar_state.is_hidden() {
+                app.sidebar_state = app.sidebar_state.toggle();
+                app.sync_runtime_views();
+                return app.save_task();
+            }
+
             let mut layout_changed = false;
             let mut had_any_work = false;
 

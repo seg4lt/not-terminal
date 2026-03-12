@@ -42,10 +42,9 @@ fn terminal_status_indicator(
     is_active: bool,
 ) -> (&'static str, Color) {
     let status = app.get_terminal_status(terminal_id);
-    let is_awaiting = app.is_awaiting_response(terminal_id);
 
     // Check awaiting state first (takes precedence)
-    if is_awaiting || matches!(status, TerminalStatus::AwaitingResponse) {
+    if app.terminal_needs_attention(terminal_id) {
         return ("🔔", rgb(220, 180, 50));
     }
 
@@ -76,10 +75,9 @@ fn terminal_status_indicator(
 /// Get the border color for a terminal based on its status
 fn terminal_status_border_color(app: &App, terminal_id: &str, is_active: bool) -> Color {
     let status = app.get_terminal_status(terminal_id);
-    let is_awaiting = app.is_awaiting_response(terminal_id);
 
     // Check awaiting state first (takes precedence)
-    if is_awaiting || matches!(status, TerminalStatus::AwaitingResponse) {
+    if app.terminal_needs_attention(terminal_id) {
         return rgb(255, 140, 0); // Orange
     }
 

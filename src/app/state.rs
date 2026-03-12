@@ -8,7 +8,7 @@ use crate::app::persistence;
 use crate::app::runtime::{PaneRuntime, RuntimeSession};
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyProgressReportState, GhosttyRuntimeAction, host_view_free, host_view_new,
-    ns_view_ptr,
+    ns_view_ptr, parent_view_set_attention_badge,
 };
 use crate::webview::WebView;
 use iced::{
@@ -795,6 +795,21 @@ impl App {
         result
     }
 
+    pub(crate) fn terminal_needs_attention(&self, terminal_id: &str) -> bool {
+        self.is_awaiting_response(terminal_id)
+            || matches!(
+                self.terminal_status.get(terminal_id),
+                Some(TerminalStatus::AwaitingResponse)
+            )
+    }
+
+    pub(crate) fn attention_terminal_count(&self) -> usize {
+        self.global_terminal_sequence()
+            .into_iter()
+            .filter(|terminal_id| self.terminal_needs_attention(terminal_id))
+            .count()
+    }
+
     pub(crate) fn quick_open_entries(&self) -> Vec<QuickOpenEntry> {
         let query = self.quick_open_query.trim().to_lowercase();
         let mut entries = Vec::new();
@@ -1146,6 +1161,13 @@ impl App {
         let active_terminal_id = self.active_terminal_id();
         let active_browser_id = self.active_browser_id();
         let modal_open = self.modal_open();
+        let attention_count = self.attention_terminal_count();
+
+        if let Some(parent_ns_view) = self.host_ns_view {
+            let visible = self.sidebar_state.is_hidden() && !modal_open && attention_count > 0;
+            let count = attention_count.min(i32::MAX as usize) as i32;
+            parent_view_set_attention_badge(parent_ns_view, visible, count);
+        }
 
         // Sync browser webviews - only the active one is visible
         let browser_toolbar_height = 32.0;
