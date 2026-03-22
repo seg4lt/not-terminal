@@ -124,6 +124,29 @@ fn tree_letter_chip(label: &'static str, text_color: Color) -> Element<'static, 
         .into()
 }
 
+fn slot_chip(slot: usize) -> Element<'static, Message> {
+    container(text(format!("{}", slot)).size(10).color(rgb(214, 190, 120)))
+        .padding([2, 5])
+        .style(|_| chip_style())
+        .into()
+}
+
+fn pin_toggle_button(terminal_id: String, pinned: bool) -> Element<'static, Message> {
+    button(
+        text(if pinned { "★" } else { "☆" })
+            .size(11)
+            .color(if pinned {
+                rgb(214, 190, 120)
+            } else {
+                rgb(136, 142, 152)
+            }),
+    )
+    .padding([0, 5])
+    .style(|_, status| subtle_action_button_style(status))
+    .on_press(Message::TogglePinnedTerminal(terminal_id))
+    .into()
+}
+
 fn missing_chip() -> Element<'static, Message> {
     container(text("!").size(10).color(rgb(220, 150, 150)))
         .padding([2, 5])
@@ -143,7 +166,107 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
     let project_indices = app.filtered_project_indices();
     let mut list = iced::widget::column![].spacing(8).width(Length::Fill);
     let active_terminal_id = app.active_terminal_id();
+    let pinned_entries = app.pinned_terminal_entries();
     let detached_active = app.persisted.selected_detached_terminal_id.is_some();
+
+    if !pinned_entries.is_empty() {
+        let pinned_active = active_terminal_id.as_ref().is_some_and(|active| {
+            pinned_entries
+                .iter()
+                .any(|entry| &entry.terminal_id == active)
+        });
+        let mut pinned_column = iced::widget::column![
+            container(
+                row![
+                    button(pinned_icon_chip())
+                        .padding([0, 0])
+                        .style(|_, status| tree_icon_button_style(status)),
+                    text("Pinned")
+                        .size(13)
+                        .color(rgb(226, 229, 235))
+                        .width(Length::Fill),
+                    container(
+                        text(format!("{}", pinned_entries.len()))
+                            .size(10)
+                            .color(rgb(145, 150, 160))
+                    )
+                    .padding([3, 6])
+                    .style(|_| subtle_badge_style()),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            )
+            .padding([8, 10])
+            .style(move |_| project_header_style(pinned_active))
+        ]
+        .spacing(0);
+
+        for entry in pinned_entries {
+            let terminal_id = entry.terminal_id.clone();
+            let terminal_id_for_unpin = terminal_id.clone();
+            let terminal_id_for_rename = terminal_id.clone();
+            let alias = entry.alias.clone();
+            let location_label = entry.location_label.clone();
+            let terminal_active = active_terminal_id
+                .as_ref()
+                .is_some_and(|active| active == &terminal_id);
+            let (status_symbol, status_color) =
+                terminal_status_indicator(app, &terminal_id, terminal_active);
+            let border_color = terminal_status_border_color(app, &terminal_id, terminal_active);
+
+            pinned_column = pinned_column.push(
+                container(
+                    row![
+                        container("")
+                            .width(Length::Fixed(2.0))
+                            .height(Length::Fill)
+                            .style(move |_| ContainerStyle {
+                                background: Some(Background::Color(border_color)),
+                                ..Default::default()
+                            }),
+                        container(text(status_symbol).size(7).color(status_color))
+                            .padding([0, 4])
+                            .width(Length::Fixed(16.0)),
+                        slot_chip(entry.slot + 1),
+                        button(
+                            container(
+                                row![
+                                    container(text(alias).size(12).wrapping(Wrapping::None))
+                                        .clip(true),
+                                    text(format!("· {}", location_label))
+                                        .size(10)
+                                        .color(rgb(128, 135, 146))
+                                ]
+                                .spacing(6)
+                                .align_y(Alignment::Center)
+                                .width(Length::Fill)
+                            )
+                            .width(Length::Fill)
+                            .clip(true)
+                        )
+                        .padding([2, 4])
+                        .style(move |_, status| terminal_button_style(status, terminal_active))
+                        .width(Length::Fill)
+                        .on_press(Message::SelectPinnedTerminal(terminal_id.clone())),
+                        button(text("✎").size(11).color(rgb(155, 162, 174)))
+                            .padding([0, 5])
+                            .style(|_, status| subtle_action_button_style(status))
+                            .on_press(Message::StartRenamePinnedTerminal(terminal_id_for_rename,)),
+                        button(text("×").size(12))
+                            .padding([0, 5])
+                            .style(|_, status| subtle_delete_button_style(status))
+                            .on_press(Message::TogglePinnedTerminal(terminal_id_for_unpin)),
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
+                )
+                .padding([4, 8])
+                .style(move |_| terminal_row_style(terminal_active)),
+            );
+        }
+
+        list = list.push(container(pinned_column).style(|_| project_group_style()));
+    }
 
     let mut detached_column = iced::widget::column![
         container(
@@ -188,10 +311,12 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
         for terminal in &app.persisted.detached_terminals {
             let terminal_id = terminal.id.clone();
             let terminal_id_for_action = terminal_id.clone();
+            let terminal_id_for_pin = terminal_id.clone();
             let terminal_active = active_terminal_id
                 .as_ref()
                 .is_some_and(|active| active == &terminal_id);
             let terminal_has_splits = app.terminal_has_splits(&terminal_id);
+            let terminal_pinned = app.is_terminal_pinned(&terminal_id);
 
             // Get status-based indicator
             let (status_symbol, status_color) =
@@ -264,6 +389,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                                 .width(Length::Fill)
                                 .on_press(Message::SelectDetachedTerminal(terminal_id.clone()))
                         },
+                        pin_toggle_button(terminal_id_for_pin, terminal_pinned),
                         // Delete button
                         button(text("×").size(12))
                             .padding([0, 5])
@@ -577,10 +703,12 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                         for terminal in &worktree.terminals {
                             let terminal_id = terminal.id.clone();
                             let terminal_id_for_action = terminal_id.clone();
+                            let terminal_id_for_pin = terminal_id.clone();
                             let terminal_active = active_terminal_id
                                 .as_ref()
                                 .is_some_and(|active| active == &terminal_id);
                             let terminal_has_splits = app.terminal_has_splits(&terminal_id);
+                            let terminal_pinned = app.is_terminal_pinned(&terminal_id);
 
                             let (status_symbol, status_color) =
                                 terminal_status_indicator(app, &terminal_id, terminal_active);
@@ -671,6 +799,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                                                 },
                                             )
                                         },
+                                        pin_toggle_button(terminal_id_for_pin, terminal_pinned),
                                         button(text("×").size(12))
                                             .padding([0, 5])
                                             .style(|_, status| subtle_delete_button_style(status))

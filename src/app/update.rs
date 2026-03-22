@@ -361,6 +361,63 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.sync_runtime_views();
             app.save_task()
         }
+        Message::TogglePinnedTerminal(terminal_id) => {
+            if app.is_terminal_pinned(&terminal_id) {
+                if app.unpin_terminal(&terminal_id) {
+                    app.status = String::from("Terminal unpinned");
+                    app.save_task()
+                } else {
+                    Task::none()
+                }
+            } else {
+                match app.pin_terminal(&terminal_id) {
+                    crate::app::state::PinTerminalOutcome::Pinned(slot) => {
+                        app.status =
+                            format!("Pinned terminal to Cmd+Option+{}", slot.saturating_add(1));
+                        app.save_task()
+                    }
+                    crate::app::state::PinTerminalOutcome::AlreadyPinned(slot) => {
+                        app.status = format!(
+                            "Terminal is already pinned on Cmd+Option+{}",
+                            slot.saturating_add(1)
+                        );
+                        Task::none()
+                    }
+                    crate::app::state::PinTerminalOutcome::LimitReached => {
+                        app.status = String::from(
+                            "Pinned slots are full (Cmd+Option+1 through Cmd+Option+9)",
+                        );
+                        Task::none()
+                    }
+                    crate::app::state::PinTerminalOutcome::Missing => {
+                        app.status = String::from("Terminal is no longer available");
+                        Task::none()
+                    }
+                }
+            }
+        }
+        Message::SelectPinnedTerminal(terminal_id) => {
+            app.select_terminal_by_id(&terminal_id);
+            if let Err(error) = app.ensure_runtime_for_terminal(&terminal_id) {
+                app.status = error;
+            }
+            app.sync_runtime_views();
+            app.save_task()
+        }
+        Message::SelectPinnedTerminalSlot(slot) => {
+            let Some(terminal_id) = app.select_pinned_terminal_slot(slot) else {
+                app.status = format!(
+                    "No pinned terminal on Cmd+Option+{}",
+                    slot.saturating_add(1)
+                );
+                return Task::none();
+            };
+            if let Err(error) = app.ensure_runtime_for_terminal(&terminal_id) {
+                app.status = error;
+            }
+            app.sync_runtime_views();
+            app.save_task()
+        }
         Message::RemoveTerminal {
             project_id,
             worktree_id,
@@ -597,6 +654,29 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::StartRenameTerminal => {
             app.start_rename_active_terminal();
+            app.command_palette_open = false;
+            app.quick_open_open = false;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = None;
+            app.preferences_open = false;
+            app.add_worktree_dialog = None;
+            app.worktree_context_menu = None;
+            app.project_context_menu = None;
+            app.sync_runtime_views();
+            if app.rename_dialog.is_some() {
+                Task::batch([
+                    operation::focus("rename-input"),
+                    operation::move_cursor_to_end("rename-input"),
+                ])
+            } else {
+                Task::none()
+            }
+        }
+        Message::StartRenamePinnedTerminal(terminal_id) => {
+            app.start_rename_pinned_terminal(&terminal_id);
             app.command_palette_open = false;
             app.quick_open_open = false;
             app.add_worktree_project_picker_open = false;
@@ -1147,6 +1227,51 @@ fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) 
         }
         CommandPaletteAction::NewDetachedTerminal => update(app, Message::AddDetachedTerminal),
         CommandPaletteAction::CloseActiveTerminal => update(app, Message::CloseActiveTerminal),
+        CommandPaletteAction::PinFocusedItem => {
+            let Some(terminal_id) = app.active_terminal_id() else {
+                app.status = String::from("No focused terminal to pin");
+                return Task::none();
+            };
+            match app.pin_terminal(&terminal_id) {
+                crate::app::state::PinTerminalOutcome::Pinned(slot) => {
+                    app.status =
+                        format!("Pinned terminal to Cmd+Option+{}", slot.saturating_add(1));
+                    app.save_task()
+                }
+                crate::app::state::PinTerminalOutcome::AlreadyPinned(slot) => {
+                    app.status = format!(
+                        "Terminal is already pinned on Cmd+Option+{}",
+                        slot.saturating_add(1)
+                    );
+                    Task::none()
+                }
+                crate::app::state::PinTerminalOutcome::LimitReached => {
+                    app.status =
+                        String::from("Pinned slots are full (Cmd+Option+1 through Cmd+Option+9)");
+                    Task::none()
+                }
+                crate::app::state::PinTerminalOutcome::Missing => {
+                    app.status = String::from("Terminal is no longer available");
+                    Task::none()
+                }
+            }
+        }
+        CommandPaletteAction::UnpinFocusedItem => {
+            let Some(terminal_id) = app.active_terminal_id() else {
+                app.status = String::from("No focused terminal to unpin");
+                return Task::none();
+            };
+            if !app.is_terminal_pinned(&terminal_id) {
+                app.status = String::from("Focused terminal is not pinned");
+                return Task::none();
+            }
+            if app.unpin_terminal(&terminal_id) {
+                app.status = String::from("Terminal unpinned");
+                app.save_task()
+            } else {
+                Task::none()
+            }
+        }
         CommandPaletteAction::RenameFocused => update(app, Message::StartRenameFocused),
         CommandPaletteAction::RenameTerminal => update(app, Message::StartRenameTerminal),
         CommandPaletteAction::RenameWorktree => {

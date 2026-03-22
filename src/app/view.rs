@@ -149,6 +149,13 @@ fn detached_icon_chip() -> Element<'static, Message> {
         .into()
 }
 
+fn pinned_icon_chip() -> Element<'static, Message> {
+    container(text("★").size(11).color(rgb(214, 190, 120)))
+        .padding([2, 6])
+        .style(|_| chip_style())
+        .into()
+}
+
 fn browser_icon_chip() -> Element<'static, Message> {
     container(text("🌐").size(11).color(rgb(100, 180, 255)))
         .padding([2, 6])

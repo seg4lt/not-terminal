@@ -634,6 +634,11 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
             crate::app::state::RenameTarget::DetachedTerminal { .. } => {
                 ("Rename Terminal", "Terminal name", None)
             }
+            crate::app::state::RenameTarget::PinnedTerminal { .. } => (
+                "Rename Pin Alias",
+                "Pinned alias",
+                Some("Shown in the pinned section. The terminal name stays separate."),
+            ),
         };
 
         let mut content = iced::widget::column![

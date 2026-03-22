@@ -33,7 +33,12 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
 
     let allow_plain_rename = app.active_terminal_id().is_none();
     let modal_open = app.modal_open();
-    let shortcut_action = detect_shortcut(&event, allow_plain_rename, modal_open);
+    let shortcut_action = detect_shortcut(
+        &event,
+        app.keyboard_modifiers,
+        allow_plain_rename,
+        modal_open,
+    );
     if modal_open {
         if let Some(
             action @ (ShortcutAction::ModalCancel
@@ -70,6 +75,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
                 | ShortcutAction::FontReset
                 | ShortcutAction::NextTerminal
                 | ShortcutAction::PreviousTerminal
+                | ShortcutAction::SelectPinnedTerminal(_)
         )
     ) && let Some(action) = shortcut_action
     {
@@ -310,6 +316,9 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
         }
         ShortcutAction::NextTerminal => super::update(app, Message::SwitchTerminalByOffset(1)),
         ShortcutAction::PreviousTerminal => super::update(app, Message::SwitchTerminalByOffset(-1)),
+        ShortcutAction::SelectPinnedTerminal(slot) => {
+            super::update(app, Message::SelectPinnedTerminalSlot(slot))
+        }
         ShortcutAction::ModalCancel => {
             app.suppress_next_key_release = true;
             if app.delete_worktree_picker.is_some() {

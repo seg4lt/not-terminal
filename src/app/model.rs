@@ -13,6 +13,7 @@ pub(crate) struct PersistedState {
     pub(crate) projects: Vec<ProjectRecord>,
     pub(crate) detached_terminals: Vec<TerminalRecord>,
     pub(crate) selected_detached_terminal_id: Option<String>,
+    pub(crate) pinned_terminals: Vec<PinnedTerminalRecord>,
     pub(crate) browsers: Vec<BrowserRecord>,
     pub(crate) selected_browser_id: Option<String>,
     pub(crate) ui: UiState,
@@ -26,6 +27,7 @@ impl Default for PersistedState {
             projects: Vec::new(),
             detached_terminals: Vec::new(),
             selected_detached_terminal_id: None,
+            pinned_terminals: Vec::new(),
             browsers: Vec::new(),
             selected_browser_id: None,
             ui: UiState::default(),
@@ -105,6 +107,14 @@ pub(crate) struct TerminalRecord {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) manual_name: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct PinnedTerminalRecord {
+    pub(crate) terminal_id: String,
+    pub(crate) alias: String,
+    pub(crate) manual_alias: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

@@ -20,6 +20,7 @@ pub(crate) enum ShortcutAction {
     FontReset,
     NextTerminal,
     PreviousTerminal,
+    SelectPinnedTerminal(usize),
     ModalCancel,
     ModalSubmit,
     ModalFocusNext,
@@ -29,6 +30,7 @@ pub(crate) enum ShortcutAction {
 
 pub(crate) fn detect_shortcut(
     event: &keyboard::Event,
+    fallback_modifiers: keyboard::Modifiers,
     allow_plain_rename: bool,
     modal_open: bool,
 ) -> Option<ShortcutAction> {
@@ -41,6 +43,7 @@ pub(crate) fn detect_shortcut(
     else {
         return None;
     };
+    let modifiers = *modifiers | fallback_modifiers;
 
     if matches!(key.as_ref(), Key::Named(Named::Escape)) && modal_open {
         return Some(ShortcutAction::ModalCancel);
@@ -98,7 +101,15 @@ pub(crate) fn detect_shortcut(
         return Some(ShortcutAction::RenameFocused);
     }
 
-    // Never intercept ctrl combinations - let them pass to terminal
+    if modifiers.logo()
+        && modifiers.alt()
+        && !modifiers.control()
+        && let Some(slot) = pinned_terminal_slot(key_char.as_deref(), physical_key)
+    {
+        return Some(ShortcutAction::SelectPinnedTerminal(slot));
+    }
+
+    // Never intercept other ctrl combinations - let them pass to terminal
     if modifiers.control() {
         return None;
     }
@@ -261,4 +272,30 @@ fn is_backspace(key: &Key, physical: &Physical) -> bool {
         Key::Named(Named::Backspace) | Key::Named(Named::Delete)
     ) || matches!(physical, Physical::Code(Code::Backspace))
         || matches!(physical, Physical::Code(Code::Delete))
+}
+
+fn pinned_terminal_slot(value: Option<&str>, physical: &Physical) -> Option<usize> {
+    match value {
+        Some("1") => Some(0),
+        Some("2") => Some(1),
+        Some("3") => Some(2),
+        Some("4") => Some(3),
+        Some("5") => Some(4),
+        Some("6") => Some(5),
+        Some("7") => Some(6),
+        Some("8") => Some(7),
+        Some("9") => Some(8),
+        _ => match physical {
+            Physical::Code(Code::Digit1) | Physical::Code(Code::Numpad1) => Some(0),
+            Physical::Code(Code::Digit2) | Physical::Code(Code::Numpad2) => Some(1),
+            Physical::Code(Code::Digit3) | Physical::Code(Code::Numpad3) => Some(2),
+            Physical::Code(Code::Digit4) | Physical::Code(Code::Numpad4) => Some(3),
+            Physical::Code(Code::Digit5) | Physical::Code(Code::Numpad5) => Some(4),
+            Physical::Code(Code::Digit6) | Physical::Code(Code::Numpad6) => Some(5),
+            Physical::Code(Code::Digit7) | Physical::Code(Code::Numpad7) => Some(6),
+            Physical::Code(Code::Digit8) | Physical::Code(Code::Numpad8) => Some(7),
+            Physical::Code(Code::Digit9) | Physical::Code(Code::Numpad9) => Some(8),
+            _ => None,
+        },
+    }
 }

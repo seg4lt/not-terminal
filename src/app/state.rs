@@ -1,8 +1,8 @@
 use crate::app::git_worktrees::{add_worktree, remove_worktree, scan_worktrees};
 use crate::app::model::{
-    BrowserRecord, PersistedState, ProjectRecord, TerminalRecord, TreeStateRecord, UiState,
-    WorktreeRecord, create_id, infer_project_name, next_browser_name, next_project_name,
-    next_terminal_name,
+    BrowserRecord, PersistedState, PinnedTerminalRecord, ProjectRecord, TerminalRecord,
+    TreeStateRecord, UiState, WorktreeRecord, create_id, infer_project_name, next_browser_name,
+    next_project_name, next_terminal_name,
 };
 use crate::app::persistence;
 use crate::app::runtime::{PaneRuntime, RuntimeSession};
@@ -45,6 +45,7 @@ pub(crate) const QUICK_OPEN_SCROLL_ID: &str = "quick-open-scroll";
 pub(crate) const ADD_WORKTREE_PROJECT_SCROLL_ID: &str = "add-worktree-project-scroll";
 pub(crate) const DELETE_WORKTREE_PROJECT_SCROLL_ID: &str = "delete-worktree-project-scroll";
 pub(crate) const DELETE_WORKTREE_SCROLL_ID: &str = "delete-worktree-scroll";
+pub(crate) const MAX_PINNED_TERMINALS: usize = 9;
 const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
 
 /// Represents the different states of the sidebar
@@ -92,6 +93,9 @@ pub(crate) enum RenameTarget {
         terminal_id: String,
     },
     DetachedTerminal {
+        terminal_id: String,
+    },
+    PinnedTerminal {
         terminal_id: String,
     },
 }
@@ -148,12 +152,28 @@ pub(crate) struct DeleteWorktreePicker {
     pub(crate) selected_index: usize,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PinnedTerminalEntry {
+    pub(crate) slot: usize,
+    pub(crate) terminal_id: String,
+    pub(crate) alias: String,
+    pub(crate) location_label: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ProjectRescanSummary {
     pub(crate) total_projects: usize,
     pub(crate) successful_projects: usize,
     pub(crate) changed_projects: usize,
     pub(crate) failed_projects: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PinTerminalOutcome {
+    Pinned(usize),
+    AlreadyPinned(usize),
+    LimitReached,
+    Missing,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +202,8 @@ pub(crate) enum CommandPaletteAction {
     NewTerminal,
     NewDetachedTerminal,
     CloseActiveTerminal,
+    PinFocusedItem,
+    UnpinFocusedItem,
     RenameFocused,
     RenameTerminal,
     RenameWorktree,
@@ -357,6 +379,10 @@ pub(crate) enum Message {
     DeleteWorktreeSubmit,
     DeleteWorktreeSelect(usize),
     DeleteWorktreeCancel,
+    TogglePinnedTerminal(String),
+    SelectPinnedTerminal(String),
+    SelectPinnedTerminalSlot(usize),
+    StartRenamePinnedTerminal(String),
     StartAddWorktree(String),
     OpenWorktreeContextMenu {
         project_id: String,
@@ -661,6 +687,19 @@ impl App {
             self.persisted.selected_browser_id = None;
         }
 
+        let valid_terminal_ids: HashSet<String> =
+            self.global_terminal_sequence().into_iter().collect();
+        let mut seen_pinned_terminal_ids = HashSet::new();
+        self.persisted.pinned_terminals.retain(|pin| {
+            valid_terminal_ids.contains(&pin.terminal_id)
+                && seen_pinned_terminal_ids.insert(pin.terminal_id.clone())
+        });
+        if self.persisted.pinned_terminals.len() > MAX_PINNED_TERMINALS {
+            self.persisted
+                .pinned_terminals
+                .truncate(MAX_PINNED_TERMINALS);
+        }
+
         if self.persisted.projects.is_empty() {
             self.persisted.active_project_id = None;
             return;
@@ -761,6 +800,122 @@ impl App {
                 .first()
                 .map(|terminal| terminal.id.clone())
         })
+    }
+
+    pub(crate) fn terminal_name_by_id(&self, terminal_id: &str) -> Option<String> {
+        if let Some(locator) = self.find_terminal_locator(terminal_id) {
+            return self
+                .persisted
+                .projects
+                .get(locator.project_idx)
+                .and_then(|project| project.worktrees.get(locator.worktree_idx))
+                .and_then(|worktree| worktree.terminals.get(locator.terminal_idx))
+                .map(|terminal| terminal.name.clone());
+        }
+
+        self.persisted
+            .detached_terminals
+            .iter()
+            .find(|terminal| terminal.id == terminal_id)
+            .map(|terminal| terminal.name.clone())
+    }
+
+    pub(crate) fn terminal_location_label(&self, terminal_id: &str) -> Option<String> {
+        if let Some(locator) = self.find_terminal_locator(terminal_id) {
+            let project = self.persisted.projects.get(locator.project_idx)?;
+            let worktree = project.worktrees.get(locator.worktree_idx)?;
+            return Some(format!("{} / {}", project.name, worktree.name));
+        }
+
+        self.persisted
+            .detached_terminals
+            .iter()
+            .find(|terminal| terminal.id == terminal_id)
+            .map(|_| String::from("Detached"))
+    }
+
+    pub(crate) fn is_terminal_pinned(&self, terminal_id: &str) -> bool {
+        self.persisted
+            .pinned_terminals
+            .iter()
+            .any(|pin| pin.terminal_id == terminal_id)
+    }
+
+    pub(crate) fn pin_slot_for_terminal(&self, terminal_id: &str) -> Option<usize> {
+        self.pinned_terminal_entries()
+            .iter()
+            .position(|entry| entry.terminal_id == terminal_id)
+    }
+
+    pub(crate) fn pinned_terminal_entries(&self) -> Vec<PinnedTerminalEntry> {
+        let mut entries = Vec::new();
+
+        for pin in &self.persisted.pinned_terminals {
+            let Some(location_label) = self.terminal_location_label(&pin.terminal_id) else {
+                continue;
+            };
+            let alias = if !pin.manual_alias || pin.alias.trim().is_empty() {
+                let Some(name) = self.terminal_name_by_id(&pin.terminal_id) else {
+                    continue;
+                };
+                name
+            } else {
+                pin.alias.clone()
+            };
+
+            entries.push(PinnedTerminalEntry {
+                slot: entries.len(),
+                terminal_id: pin.terminal_id.clone(),
+                alias,
+                location_label,
+            });
+        }
+
+        entries
+    }
+
+    pub(crate) fn pin_terminal(&mut self, terminal_id: &str) -> PinTerminalOutcome {
+        if let Some(slot) = self.pin_slot_for_terminal(terminal_id) {
+            return PinTerminalOutcome::AlreadyPinned(slot);
+        }
+
+        let Some(alias) = self.terminal_name_by_id(terminal_id) else {
+            return PinTerminalOutcome::Missing;
+        };
+
+        let next_slot = self.pinned_terminal_entries().len();
+        if next_slot >= MAX_PINNED_TERMINALS {
+            return PinTerminalOutcome::LimitReached;
+        }
+
+        self.persisted.pinned_terminals.push(PinnedTerminalRecord {
+            terminal_id: terminal_id.to_string(),
+            alias,
+            manual_alias: false,
+        });
+
+        PinTerminalOutcome::Pinned(next_slot)
+    }
+
+    pub(crate) fn unpin_terminal(&mut self, terminal_id: &str) -> bool {
+        let len_before = self.persisted.pinned_terminals.len();
+        self.persisted
+            .pinned_terminals
+            .retain(|pin| pin.terminal_id != terminal_id);
+        self.persisted.pinned_terminals.len() != len_before
+    }
+
+    pub(crate) fn select_pinned_terminal_slot(&mut self, slot: usize) -> Option<String> {
+        let terminal_id = self
+            .pinned_terminal_entries()
+            .get(slot)?
+            .terminal_id
+            .clone();
+        if !self.terminal_exists(terminal_id.as_str()) {
+            return None;
+        }
+        self.select_terminal_by_id(&terminal_id);
+        Some(terminal_id)
     }
 
     pub(crate) fn active_terminal_context(&self) -> Option<ActiveTerminalContext> {
@@ -1067,6 +1222,17 @@ impl App {
             .active_browser()
             .map(|browser| browser.name.clone())
             .unwrap_or_else(|| String::from("browser"));
+        let active_terminal_context = self.active_terminal_context();
+        let active_terminal_label = active_terminal_context
+            .as_ref()
+            .map(|context| context.terminal_name.clone())
+            .unwrap_or_else(|| String::from("No active terminal"));
+        let active_terminal_id = active_terminal_context
+            .as_ref()
+            .map(|context| context.terminal_id.clone());
+        let active_terminal_pinned = active_terminal_id
+            .as_ref()
+            .is_some_and(|terminal_id| self.is_terminal_pinned(terminal_id));
 
         let mut entries = vec![
             command_palette_entry(
@@ -1098,6 +1264,22 @@ impl App {
                 "Close Active Terminal",
                 "Close the currently selected terminal • Cmd+W",
                 "terminal close kill remove",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::PinFocusedItem,
+                format!("Pin {active_terminal_label}"),
+                "Pin the active terminal into the pinned section",
+                "pin favorite focused active terminal shortcut",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::UnpinFocusedItem,
+                if active_terminal_pinned {
+                    format!("Unpin {active_terminal_label}")
+                } else {
+                    String::from("Unpin Focused Terminal")
+                },
+                "Remove the active terminal from the pinned section",
+                "unpin remove favorite focused active terminal shortcut",
             ),
             command_palette_entry(
                 CommandPaletteAction::RenameFocused,
@@ -1660,6 +1842,29 @@ impl App {
         }
     }
 
+    pub(crate) fn start_rename_pinned_terminal(&mut self, terminal_id: &str) {
+        let Some(pin) = self
+            .persisted
+            .pinned_terminals
+            .iter()
+            .find(|pin| pin.terminal_id == terminal_id)
+        else {
+            return;
+        };
+
+        self.rename_dialog = Some(RenameDialog {
+            target: RenameTarget::PinnedTerminal {
+                terminal_id: terminal_id.to_string(),
+            },
+            value: if !pin.manual_alias || pin.alias.trim().is_empty() {
+                self.terminal_name_by_id(terminal_id)
+                    .unwrap_or_else(|| pin.alias.clone())
+            } else {
+                pin.alias.clone()
+            },
+        });
+    }
+
     pub(crate) fn commit_rename(&mut self) -> bool {
         let Some(dialog) = self.rename_dialog.clone() else {
             return false;
@@ -1721,6 +1926,17 @@ impl App {
                 {
                     terminal.name = value.to_string();
                     terminal.manual_name = true;
+                }
+            }
+            RenameTarget::PinnedTerminal { terminal_id } => {
+                if let Some(pin) = self
+                    .persisted
+                    .pinned_terminals
+                    .iter_mut()
+                    .find(|pin| pin.terminal_id == terminal_id)
+                {
+                    pin.alias = value.to_string();
+                    pin.manual_alias = true;
                 }
             }
         }
