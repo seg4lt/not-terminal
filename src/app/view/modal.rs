@@ -1,6 +1,8 @@
 use super::*;
 use crate::app::state::{
-    App, COMMAND_PALETTE_SCROLL_ID, Message, QUICK_OPEN_SCROLL_ID, QuickOpenEntryKind,
+    ADD_WORKTREE_PROJECT_SCROLL_ID, App, COMMAND_PALETTE_SCROLL_ID,
+    DELETE_WORKTREE_PROJECT_SCROLL_ID, DELETE_WORKTREE_SCROLL_ID, Message, QUICK_OPEN_SCROLL_ID,
+    QuickOpenEntryKind,
 };
 use iced::widget::{button, checkbox, container, row, scrollable, text, text_input};
 use iced::{Element, Length};
@@ -235,6 +237,304 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
         .padding(12)
         .width(Length::Fixed(560.0))
         .height(Length::Fixed(420.0))
+        .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
+    if app.delete_worktree_project_picker_open {
+        let entries = app.delete_worktree_project_entries();
+        let mut list = iced::widget::column![].spacing(6).width(Length::Fill);
+
+        for (idx, entry) in entries.iter().enumerate() {
+            let is_selected = idx == app.delete_worktree_project_selected_index;
+            let badge_text = if is_selected {
+                rgb(255, 255, 255)
+            } else {
+                rgb(145, 152, 165)
+            };
+            let badge_bg = if is_selected {
+                Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 0.18,
+                }
+            } else {
+                rgb(35, 40, 50)
+            };
+            let detail = if entry.worktree_count == 1 {
+                String::from("1 removable worktree")
+            } else {
+                format!("{} removable worktrees", entry.worktree_count)
+            };
+
+            list = list.push(
+                button(
+                    row![
+                        container(text("PROJ").size(10).color(badge_text))
+                            .padding([1, 5])
+                            .style(move |_| ContainerStyle {
+                                background: Some(Background::Color(badge_bg)),
+                                border: Border {
+                                    width: 0.0,
+                                    color: Color::TRANSPARENT,
+                                    radius: 3.0.into(),
+                                },
+                                ..Default::default()
+                            }),
+                        iced::widget::column![
+                            text(entry.project_name.clone()).size(13),
+                            text(detail).size(11).color(rgb(138, 144, 156)),
+                        ]
+                        .spacing(2)
+                    ]
+                    .spacing(8),
+                )
+                .width(Length::Fill)
+                .padding([6, 6])
+                .style(move |_, status| {
+                    if is_selected {
+                        selected_entry_style(status)
+                    } else {
+                        tree_icon_button_style(status)
+                    }
+                })
+                .on_press(Message::DeleteWorktreeProjectSelect(idx)),
+            );
+        }
+
+        if entries.is_empty() {
+            list = list.push(container(text("No projects available").size(12)).padding([4, 2]));
+        }
+
+        let panel = container(
+            iced::widget::column![
+                row![
+                    text("Choose Project").size(16),
+                    button(text("Close").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::DeleteWorktreeProjectCancel),
+                ]
+                .spacing(8),
+                text("Enter: choose project and then pick a worktree to remove")
+                    .size(11)
+                    .color(rgb(138, 144, 156)),
+                scrollable(list)
+                    .id(DELETE_WORKTREE_PROJECT_SCROLL_ID)
+                    .height(Length::Fill),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fixed(520.0))
+        .height(Length::Fixed(360.0))
+        .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
+    if let Some(picker) = &app.delete_worktree_picker {
+        let entries = app.delete_worktree_entries(&picker.project_id);
+        let mut list = iced::widget::column![].spacing(6).width(Length::Fill);
+
+        for (idx, entry) in entries.iter().enumerate() {
+            let is_selected = idx == picker.selected_index;
+            let badge_text = if is_selected {
+                rgb(255, 255, 255)
+            } else {
+                rgb(145, 152, 165)
+            };
+            let badge_bg = if is_selected {
+                Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 0.18,
+                }
+            } else {
+                rgb(35, 40, 50)
+            };
+
+            list = list.push(
+                button(
+                    row![
+                        container(text("W").size(10).color(badge_text))
+                            .padding([1, 5])
+                            .style(move |_| ContainerStyle {
+                                background: Some(Background::Color(badge_bg)),
+                                border: Border {
+                                    width: 0.0,
+                                    color: Color::TRANSPARENT,
+                                    radius: 3.0.into(),
+                                },
+                                ..Default::default()
+                            }),
+                        iced::widget::column![
+                            text(entry.worktree_name.clone()).size(13),
+                            text(entry.project_name.clone())
+                                .size(11)
+                                .color(rgb(138, 144, 156)),
+                        ]
+                        .spacing(2)
+                    ]
+                    .spacing(8),
+                )
+                .width(Length::Fill)
+                .padding([6, 6])
+                .style(move |_, status| {
+                    if is_selected {
+                        selected_entry_style(status)
+                    } else {
+                        tree_icon_button_style(status)
+                    }
+                })
+                .on_press(Message::DeleteWorktreeSelect(idx)),
+            );
+        }
+
+        if entries.is_empty() {
+            list = list
+                .push(container(text("No removable worktrees available").size(12)).padding([4, 2]));
+        }
+
+        let panel = container(
+            iced::widget::column![
+                row![
+                    text("Choose Worktree").size(16),
+                    button(text("Close").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::DeleteWorktreeCancel),
+                ]
+                .spacing(8),
+                text("Enter: remove the selected worktree immediately")
+                    .size(11)
+                    .color(rgb(138, 144, 156)),
+                scrollable(list)
+                    .id(DELETE_WORKTREE_SCROLL_ID)
+                    .height(Length::Fill),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fixed(520.0))
+        .height(Length::Fixed(360.0))
+        .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
+    if app.add_worktree_project_picker_open {
+        let entries = app.add_worktree_project_entries();
+        let mut list = iced::widget::column![].spacing(6).width(Length::Fill);
+
+        for (idx, entry) in entries.iter().enumerate() {
+            let is_selected = idx == app.add_worktree_project_selected_index;
+            let badge_text = if is_selected {
+                rgb(255, 255, 255)
+            } else {
+                rgb(145, 152, 165)
+            };
+            let badge_bg = if is_selected {
+                Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 0.18,
+                }
+            } else {
+                rgb(35, 40, 50)
+            };
+            let detail = if entry.worktree_count == 1 {
+                String::from("1 worktree")
+            } else {
+                format!("{} worktrees", entry.worktree_count)
+            };
+
+            list = list.push(
+                button(
+                    row![
+                        container(text("PROJ").size(10).color(badge_text))
+                            .padding([1, 5])
+                            .style(move |_| ContainerStyle {
+                                background: Some(Background::Color(badge_bg)),
+                                border: Border {
+                                    width: 0.0,
+                                    color: Color::TRANSPARENT,
+                                    radius: 3.0.into(),
+                                },
+                                ..Default::default()
+                            }),
+                        iced::widget::column![
+                            text(entry.project_name.clone()).size(13),
+                            text(detail).size(11).color(rgb(138, 144, 156)),
+                        ]
+                        .spacing(2)
+                    ]
+                    .spacing(8),
+                )
+                .width(Length::Fill)
+                .padding([6, 6])
+                .style(move |_, status| {
+                    if is_selected {
+                        selected_entry_style(status)
+                    } else {
+                        tree_icon_button_style(status)
+                    }
+                })
+                .on_press(Message::AddWorktreeProjectSelect(idx)),
+            );
+        }
+
+        if entries.is_empty() {
+            list = list.push(container(text("No projects available").size(12)).padding([4, 2]));
+        }
+
+        let panel = container(
+            iced::widget::column![
+                row![
+                    text("Choose Project").size(16),
+                    button(text("Close").size(12))
+                        .style(|_, status| toolbar_button_style(status))
+                        .on_press(Message::AddWorktreeProjectCancel),
+                ]
+                .spacing(8),
+                text("Enter: choose project and open the add-worktree form")
+                    .size(11)
+                    .color(rgb(138, 144, 156)),
+                scrollable(list)
+                    .id(ADD_WORKTREE_PROJECT_SCROLL_ID)
+                    .height(Length::Fill),
+            ]
+            .spacing(8),
+        )
+        .padding(12)
+        .width(Length::Fixed(520.0))
+        .height(Length::Fixed(360.0))
         .style(|_| modal_panel_style());
 
         return Some(

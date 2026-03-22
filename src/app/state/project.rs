@@ -2,74 +2,17 @@ use super::*;
 use crate::app::git_branch::resolve_branch;
 
 impl App {
-    pub(crate) fn add_project_from_git_folder(&mut self, git_folder: &str) -> Result<(), String> {
-        let scanned = scan_worktrees(git_folder)?;
-
-        let project_id = create_id("project");
-        let mut project = ProjectRecord {
-            id: project_id.clone(),
-            name: infer_project_name(git_folder),
-            git_folder_path: Some(git_folder.to_string()),
-            worktrees: scanned
-                .into_iter()
-                .map(|worktree| WorktreeRecord {
-                    id: worktree.id,
-                    name: worktree.name,
-                    manual_name: false,
-                    path: worktree.path,
-                    missing: worktree.missing,
-                    terminals: Vec::new(),
-                })
-                .collect(),
-            tree_state: TreeStateRecord::default(),
-            selected_terminal_id: None,
-        };
-
-        if project.name.trim().is_empty() {
-            project.name = next_project_name(&self.persisted.projects);
-        }
-
-        self.persisted.projects.push(project);
-        self.persisted.active_project_id = Some(project_id.clone());
-
-        // Proactively resolve branches and update worktree names
-        self.resolve_and_update_worktree_branches(&project_id);
-
-        self.normalize_selection();
-        Ok(())
-    }
-
-    fn resolve_and_update_worktree_branches(&mut self, project_id: &str) {
-        let project_idx = if let Some(idx) = self
-            .persisted
-            .projects
-            .iter()
-            .position(|project| project.id == project_id)
-        {
-            idx
-        } else {
-            return;
-        };
-
-        for worktree in &mut self.persisted.projects[project_idx].worktrees {
-            if let Some(branch) = resolve_branch(&worktree.path) {
-                // Update worktree name to branch name, unless it was manually renamed
-                if !worktree.manual_name {
-                    worktree.name = branch;
-                }
-            }
-        }
-    }
-
-    pub(crate) fn rescan_project(&mut self, project_id: &str) -> Result<(), String> {
+    fn rescan_project_internal(&mut self, project_id: &str) -> Result<bool, String> {
         let Some(project_idx) = self
             .persisted
             .projects
             .iter()
             .position(|project| project.id == project_id)
         else {
-            return Ok(());
+            return Ok(false);
         };
+
+        let project_before = self.persisted.projects[project_idx].clone();
 
         let git_folder = self.persisted.projects[project_idx]
             .git_folder_path
@@ -145,11 +88,105 @@ impl App {
             self.remove_runtime(&terminal_id);
         }
 
-        // Update branch names for all worktrees after rescan
         self.resolve_and_update_worktree_branches(project_id);
+        self.normalize_selection();
+
+        Ok(self.persisted.projects[project_idx] != project_before)
+    }
+
+    pub(crate) fn add_project_from_git_folder(&mut self, git_folder: &str) -> Result<(), String> {
+        let scanned = scan_worktrees(git_folder)?;
+
+        let project_id = create_id("project");
+        let mut project = ProjectRecord {
+            id: project_id.clone(),
+            name: infer_project_name(git_folder),
+            git_folder_path: Some(git_folder.to_string()),
+            worktrees: scanned
+                .into_iter()
+                .map(|worktree| WorktreeRecord {
+                    id: worktree.id,
+                    name: worktree.name,
+                    manual_name: false,
+                    path: worktree.path,
+                    missing: worktree.missing,
+                    terminals: Vec::new(),
+                })
+                .collect(),
+            tree_state: TreeStateRecord::default(),
+            selected_terminal_id: None,
+        };
+
+        if project.name.trim().is_empty() {
+            project.name = next_project_name(&self.persisted.projects);
+        }
+
+        self.persisted.projects.push(project);
+        self.persisted.active_project_id = Some(project_id.clone());
+
+        // Proactively resolve branches and update worktree names
+        self.resolve_and_update_worktree_branches(&project_id);
 
         self.normalize_selection();
         Ok(())
+    }
+
+    fn resolve_and_update_worktree_branches(&mut self, project_id: &str) {
+        let project_idx = if let Some(idx) = self
+            .persisted
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+        {
+            idx
+        } else {
+            return;
+        };
+
+        for worktree in &mut self.persisted.projects[project_idx].worktrees {
+            if let Some(branch) = resolve_branch(&worktree.path) {
+                // Update worktree name to branch name, unless it was manually renamed
+                if !worktree.manual_name {
+                    worktree.name = branch;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn rescan_project(&mut self, project_id: &str) -> Result<(), String> {
+        self.rescan_project_internal(project_id).map(|_| ())
+    }
+
+    pub(crate) fn rescan_all_projects(&mut self) -> ProjectRescanSummary {
+        let project_refs: Vec<(String, String)> = self
+            .persisted
+            .projects
+            .iter()
+            .map(|project| (project.id.clone(), project.name.clone()))
+            .collect();
+
+        let mut summary = ProjectRescanSummary {
+            total_projects: project_refs.len(),
+            ..ProjectRescanSummary::default()
+        };
+
+        for (project_id, project_name) in project_refs {
+            match self.rescan_project_internal(&project_id) {
+                Ok(changed) => {
+                    summary.successful_projects += 1;
+                    if changed {
+                        summary.changed_projects += 1;
+                    }
+                }
+                Err(error) => {
+                    summary
+                        .failed_projects
+                        .push(format!("{project_name}: {error}"));
+                }
+            }
+        }
+
+        summary
     }
 
     pub(crate) fn start_add_worktree(&mut self, project_id: &str) {

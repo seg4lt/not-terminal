@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct PersistedState {
     pub(crate) version: u32,
@@ -33,7 +33,7 @@ impl Default for PersistedState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct UiState {
     pub(crate) sidebar_collapsed: bool,
@@ -77,7 +77,7 @@ pub(crate) const fn default_show_native_title_bar() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct ProjectRecord {
     pub(crate) id: String,
@@ -88,7 +88,7 @@ pub(crate) struct ProjectRecord {
     pub(crate) selected_terminal_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct WorktreeRecord {
     pub(crate) id: String,
@@ -99,7 +99,7 @@ pub(crate) struct WorktreeRecord {
     pub(crate) terminals: Vec<TerminalRecord>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct TerminalRecord {
     pub(crate) id: String,
@@ -107,7 +107,7 @@ pub(crate) struct TerminalRecord {
     pub(crate) manual_name: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct BrowserRecord {
     pub(crate) id: String,
@@ -115,7 +115,7 @@ pub(crate) struct BrowserRecord {
     pub(crate) url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct TreeStateRecord {
     pub(crate) collapsed_projects: Vec<String>,

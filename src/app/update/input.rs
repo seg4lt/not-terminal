@@ -1,7 +1,8 @@
 use crate::app::shortcuts::{ShortcutAction, detect_shortcut};
 use crate::app::state::{
-    App, COMMAND_PALETTE_SCROLL_ID, Message, QUICK_OPEN_SCROLL_ID, QuickOpenEntryKind,
-    SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN,
+    ADD_WORKTREE_PROJECT_SCROLL_ID, App, COMMAND_PALETTE_SCROLL_ID,
+    DELETE_WORKTREE_PROJECT_SCROLL_ID, DELETE_WORKTREE_SCROLL_ID, Message, QUICK_OPEN_SCROLL_ID,
+    QuickOpenEntryKind, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN,
 };
 use iced::{Task, keyboard, mouse, widget::operation};
 use std::time::Instant;
@@ -311,6 +312,15 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
         ShortcutAction::PreviousTerminal => super::update(app, Message::SwitchTerminalByOffset(-1)),
         ShortcutAction::ModalCancel => {
             app.suppress_next_key_release = true;
+            if app.delete_worktree_picker.is_some() {
+                return super::update(app, Message::DeleteWorktreeCancel);
+            }
+            if app.delete_worktree_project_picker_open {
+                return super::update(app, Message::DeleteWorktreeProjectCancel);
+            }
+            if app.add_worktree_project_picker_open {
+                return super::update(app, Message::AddWorktreeProjectCancel);
+            }
             if app.project_context_menu.is_some() {
                 return super::update(app, Message::CloseProjectContextMenu);
             }
@@ -336,6 +346,15 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
         }
         ShortcutAction::ModalSubmit => {
             app.suppress_next_key_release = true;
+            if app.delete_worktree_picker.is_some() {
+                return super::update(app, Message::DeleteWorktreeSubmit);
+            }
+            if app.delete_worktree_project_picker_open {
+                return super::update(app, Message::DeleteWorktreeProjectSubmit);
+            }
+            if app.add_worktree_project_picker_open {
+                return super::update(app, Message::AddWorktreeProjectSubmit);
+            }
             if app.rename_dialog.is_some() {
                 return super::update(app, Message::RenameCommit);
             }
@@ -352,7 +371,48 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
         }
         ShortcutAction::ModalFocusNext => {
             app.suppress_next_key_release = true;
-            if app.command_palette_open {
+            if let Some(project_id) = app
+                .delete_worktree_picker
+                .as_ref()
+                .map(|picker| picker.project_id.clone())
+            {
+                let entries = app.delete_worktree_entries(&project_id);
+                let selected_index = if let Some(picker) = app.delete_worktree_picker.as_mut() {
+                    if !entries.is_empty() {
+                        picker.selected_index = (picker.selected_index + 1) % entries.len();
+                    }
+                    picker.selected_index
+                } else {
+                    0
+                };
+                modal_selection_scroll_task(
+                    DELETE_WORKTREE_SCROLL_ID,
+                    selected_index,
+                    entries.len(),
+                )
+            } else if app.delete_worktree_project_picker_open {
+                let entries = app.delete_worktree_project_entries();
+                if !entries.is_empty() {
+                    app.delete_worktree_project_selected_index =
+                        (app.delete_worktree_project_selected_index + 1) % entries.len();
+                }
+                modal_selection_scroll_task(
+                    DELETE_WORKTREE_PROJECT_SCROLL_ID,
+                    app.delete_worktree_project_selected_index,
+                    entries.len(),
+                )
+            } else if app.add_worktree_project_picker_open {
+                let entries = app.add_worktree_project_entries();
+                if !entries.is_empty() {
+                    app.add_worktree_project_selected_index =
+                        (app.add_worktree_project_selected_index + 1) % entries.len();
+                }
+                modal_selection_scroll_task(
+                    ADD_WORKTREE_PROJECT_SCROLL_ID,
+                    app.add_worktree_project_selected_index,
+                    entries.len(),
+                )
+            } else if app.command_palette_open {
                 let entries = app.command_palette_entries();
                 if !entries.is_empty() {
                     app.command_palette_selected_index =
@@ -380,7 +440,63 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
         }
         ShortcutAction::ModalFocusPrevious => {
             app.suppress_next_key_release = true;
-            if app.command_palette_open {
+            if let Some(project_id) = app
+                .delete_worktree_picker
+                .as_ref()
+                .map(|picker| picker.project_id.clone())
+            {
+                let entries = app.delete_worktree_entries(&project_id);
+                let selected_index = if let Some(picker) = app.delete_worktree_picker.as_mut() {
+                    if !entries.is_empty() {
+                        let count = entries.len();
+                        picker.selected_index = if picker.selected_index == 0 {
+                            count - 1
+                        } else {
+                            picker.selected_index - 1
+                        };
+                    }
+                    picker.selected_index
+                } else {
+                    0
+                };
+                modal_selection_scroll_task(
+                    DELETE_WORKTREE_SCROLL_ID,
+                    selected_index,
+                    entries.len(),
+                )
+            } else if app.delete_worktree_project_picker_open {
+                let entries = app.delete_worktree_project_entries();
+                if !entries.is_empty() {
+                    let count = entries.len();
+                    app.delete_worktree_project_selected_index =
+                        if app.delete_worktree_project_selected_index == 0 {
+                            count - 1
+                        } else {
+                            app.delete_worktree_project_selected_index - 1
+                        };
+                }
+                modal_selection_scroll_task(
+                    DELETE_WORKTREE_PROJECT_SCROLL_ID,
+                    app.delete_worktree_project_selected_index,
+                    entries.len(),
+                )
+            } else if app.add_worktree_project_picker_open {
+                let entries = app.add_worktree_project_entries();
+                if !entries.is_empty() {
+                    let count = entries.len();
+                    app.add_worktree_project_selected_index =
+                        if app.add_worktree_project_selected_index == 0 {
+                            count - 1
+                        } else {
+                            app.add_worktree_project_selected_index - 1
+                        };
+                }
+                modal_selection_scroll_task(
+                    ADD_WORKTREE_PROJECT_SCROLL_ID,
+                    app.add_worktree_project_selected_index,
+                    entries.len(),
+                )
+            } else if app.command_palette_open {
                 let entries = app.command_palette_entries();
                 if !entries.is_empty() {
                     let count = entries.len();

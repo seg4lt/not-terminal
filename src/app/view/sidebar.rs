@@ -406,6 +406,10 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                 .padding([0, 5])
                 .style(|_, status| subtle_action_button_style(status))
                 .on_press(Message::ToggleAllProjectTreesCollapsed),
+                button(text("Rescan").size(10))
+                    .padding([0, 5])
+                    .style(|_, status| subtle_action_button_style(status))
+                    .on_press(Message::RescanAllProjects),
                 button(text("+").size(12))
                     .padding([0, 5])
                     .style(|_, status| subtle_action_button_style(status))

@@ -42,6 +42,9 @@ pub(crate) const SIDEBAR_WIDTH_MAX: f32 = 500.0;
 pub(crate) const SIDEBAR_WIDTH_DEFAULT: f32 = 248.0;
 pub(crate) const COMMAND_PALETTE_SCROLL_ID: &str = "command-palette-scroll";
 pub(crate) const QUICK_OPEN_SCROLL_ID: &str = "quick-open-scroll";
+pub(crate) const ADD_WORKTREE_PROJECT_SCROLL_ID: &str = "add-worktree-project-scroll";
+pub(crate) const DELETE_WORKTREE_PROJECT_SCROLL_ID: &str = "delete-worktree-project-scroll";
+pub(crate) const DELETE_WORKTREE_SCROLL_ID: &str = "delete-worktree-scroll";
 const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
 
 /// Represents the different states of the sidebar
@@ -118,6 +121,42 @@ pub(crate) struct ProjectContextMenu {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct AddWorktreeProjectEntry {
+    pub(crate) project_id: String,
+    pub(crate) project_name: String,
+    pub(crate) worktree_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DeleteWorktreeProjectEntry {
+    pub(crate) project_id: String,
+    pub(crate) project_name: String,
+    pub(crate) worktree_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DeleteWorktreeEntry {
+    pub(crate) project_id: String,
+    pub(crate) project_name: String,
+    pub(crate) worktree_id: String,
+    pub(crate) worktree_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DeleteWorktreePicker {
+    pub(crate) project_id: String,
+    pub(crate) selected_index: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProjectRescanSummary {
+    pub(crate) total_projects: usize,
+    pub(crate) successful_projects: usize,
+    pub(crate) changed_projects: usize,
+    pub(crate) failed_projects: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum QuickOpenEntryKind {
     ExistingTerminal {
         terminal_id: String,
@@ -148,7 +187,10 @@ pub(crate) enum CommandPaletteAction {
     RenameWorktree,
     OpenPreferences,
     AddProject,
+    AddWorktreeToProject,
     AddWorktreeToActiveProject,
+    DeleteWorktreeFromProject,
+    RescanAllProjects,
     RescanActiveProject,
     ToggleBrowsers,
     AddBrowser,
@@ -208,6 +250,11 @@ pub(crate) struct App {
     pub(crate) quick_open_query: String,
     pub(crate) quick_open_selected_index: usize,
     pub(crate) quick_open_ignore_next_query_change: bool,
+    pub(crate) add_worktree_project_picker_open: bool,
+    pub(crate) add_worktree_project_selected_index: usize,
+    pub(crate) delete_worktree_project_picker_open: bool,
+    pub(crate) delete_worktree_project_selected_index: usize,
+    pub(crate) delete_worktree_picker: Option<DeleteWorktreePicker>,
     pub(crate) rename_dialog: Option<RenameDialog>,
     pub(crate) add_worktree_dialog: Option<AddWorktreeDialog>,
     pub(crate) worktree_context_menu: Option<WorktreeContextMenu>,
@@ -250,6 +297,7 @@ pub(crate) enum Message {
     FilterChanged(String),
     AddProject,
     ProjectRescan(String),
+    RescanAllProjects,
     #[allow(dead_code)]
     SelectProject(String),
     #[allow(dead_code)]
@@ -297,6 +345,18 @@ pub(crate) enum Message {
     RenameValueChanged(String),
     RenameCommit,
     RenameCancel,
+    OpenAddWorktreeProjectPicker,
+    AddWorktreeProjectSubmit,
+    AddWorktreeProjectSelect(usize),
+    AddWorktreeProjectCancel,
+    OpenDeleteWorktreeProjectPicker,
+    DeleteWorktreeProjectSubmit,
+    DeleteWorktreeProjectSelect(usize),
+    DeleteWorktreeProjectCancel,
+    OpenDeleteWorktreePicker(String),
+    DeleteWorktreeSubmit,
+    DeleteWorktreeSelect(usize),
+    DeleteWorktreeCancel,
     StartAddWorktree(String),
     OpenWorktreeContextMenu {
         project_id: String,
@@ -363,6 +423,11 @@ impl App {
             quick_open_query: String::new(),
             quick_open_selected_index: 0,
             quick_open_ignore_next_query_change: false,
+            add_worktree_project_picker_open: false,
+            add_worktree_project_selected_index: 0,
+            delete_worktree_project_picker_open: false,
+            delete_worktree_project_selected_index: 0,
+            delete_worktree_picker: None,
             rename_dialog: None,
             add_worktree_dialog: None,
             worktree_context_menu: None,
@@ -919,6 +984,61 @@ impl App {
         entries
     }
 
+    pub(crate) fn add_worktree_project_entries(&self) -> Vec<AddWorktreeProjectEntry> {
+        self.persisted
+            .projects
+            .iter()
+            .map(|project| AddWorktreeProjectEntry {
+                project_id: project.id.clone(),
+                project_name: project.name.clone(),
+                worktree_count: project.worktrees.len(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn delete_worktree_project_entries(&self) -> Vec<DeleteWorktreeProjectEntry> {
+        self.persisted
+            .projects
+            .iter()
+            .filter_map(|project| {
+                let worktree_count = project
+                    .worktrees
+                    .iter()
+                    .filter(|worktree| !Self::is_main_worktree(project, worktree))
+                    .count();
+
+                (worktree_count > 0).then_some(DeleteWorktreeProjectEntry {
+                    project_id: project.id.clone(),
+                    project_name: project.name.clone(),
+                    worktree_count,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn delete_worktree_entries(&self, project_id: &str) -> Vec<DeleteWorktreeEntry> {
+        let Some(project) = self
+            .persisted
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+        else {
+            return Vec::new();
+        };
+
+        project
+            .worktrees
+            .iter()
+            .filter(|worktree| !Self::is_main_worktree(project, worktree))
+            .map(|worktree| DeleteWorktreeEntry {
+                project_id: project.id.clone(),
+                project_name: project.name.clone(),
+                worktree_id: worktree.id.clone(),
+                worktree_name: worktree.name.clone(),
+            })
+            .collect()
+    }
+
     pub(crate) fn command_palette_entries(&self) -> Vec<CommandPaletteEntry> {
         let query = self.command_palette_query.trim().to_lowercase();
         let search_terms: Vec<&str> = if query.is_empty() {
@@ -1010,6 +1130,24 @@ impl App {
                 "project repository repo add open folder",
             ),
             command_palette_entry(
+                CommandPaletteAction::AddWorktreeToProject,
+                "Add Worktree",
+                "Choose a project, then create a new worktree",
+                "worktree branch create project add",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::DeleteWorktreeFromProject,
+                "Delete Worktree",
+                "Choose a project, then remove one of its worktrees",
+                "worktree delete remove project",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::RescanAllProjects,
+                "Rescan All Projects",
+                "Refresh every project's worktree list",
+                "rescan refresh all projects worktree git",
+            ),
+            command_palette_entry(
                 CommandPaletteAction::ToggleBrowsers,
                 if self.persisted.ui.enable_browsers {
                     "Disable Browsers"
@@ -1055,8 +1193,8 @@ impl App {
             entries.push(command_palette_entry(
                 CommandPaletteAction::AddWorktreeToActiveProject,
                 format!("Add Worktree to {active_project_label}"),
-                "Create a new worktree for the active project",
-                "worktree branch create project",
+                "Skip project picker and use the active project",
+                "worktree branch create project active",
             ));
             entries.push(command_palette_entry(
                 CommandPaletteAction::RescanActiveProject,
@@ -1375,6 +1513,9 @@ impl App {
     pub(crate) fn modal_open(&self) -> bool {
         self.command_palette_open
             || self.quick_open_open
+            || self.add_worktree_project_picker_open
+            || self.delete_worktree_project_picker_open
+            || self.delete_worktree_picker.is_some()
             || self.preferences_open
             || self.rename_dialog.is_some()
             || self.add_worktree_dialog.is_some()
@@ -1596,6 +1737,20 @@ impl App {
         }
 
         self.select_detached_terminal(terminal_id);
+    }
+}
+
+impl App {
+    fn normalize_path_key(path: &str) -> &str {
+        path.trim_end_matches(['/', '\\'])
+    }
+
+    pub(crate) fn is_main_worktree(project: &ProjectRecord, worktree: &WorktreeRecord) -> bool {
+        let Some(git_folder) = project.git_folder_path.as_deref() else {
+            return false;
+        };
+
+        Self::normalize_path_key(git_folder) == Self::normalize_path_key(&worktree.path)
     }
 }
 

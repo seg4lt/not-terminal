@@ -1,8 +1,8 @@
 use super::state::{App, Message};
 use crate::app::shortcuts::ShortcutAction;
 use crate::app::state::{
-    COMMAND_PALETTE_SCROLL_ID, CommandPaletteAction, QUICK_OPEN_SCROLL_ID, QuickOpenEntry,
-    QuickOpenEntryKind,
+    COMMAND_PALETTE_SCROLL_ID, CommandPaletteAction, ProjectRescanSummary, QUICK_OPEN_SCROLL_ID,
+    QuickOpenEntry, QuickOpenEntryKind,
 };
 use crate::ghostty_embed::{
     disable_system_hide_shortcuts, register_focus_toggle_hotkey, take_pending_attention_badge_click,
@@ -13,6 +13,58 @@ use std::time::Instant;
 
 mod browser;
 mod input;
+
+fn rescan_status(summary: &ProjectRescanSummary, startup: bool) -> String {
+    if summary.total_projects == 0 {
+        return if startup {
+            String::from("State loaded")
+        } else {
+            String::from("No projects to rescan")
+        };
+    }
+
+    let project_label = if summary.successful_projects == 1 {
+        "project"
+    } else {
+        "projects"
+    };
+
+    if summary.failed_projects.is_empty() {
+        return if startup {
+            format!(
+                "State loaded and rescanned {} {}",
+                summary.successful_projects, project_label
+            )
+        } else {
+            format!(
+                "Rescanned {} {}",
+                summary.successful_projects, project_label
+            )
+        };
+    }
+
+    let failure_suffix = if summary.failed_projects.len() == 1 {
+        format!(" Failed: {}", summary.failed_projects[0])
+    } else {
+        format!(
+            " First failure: {} (+{} more)",
+            summary.failed_projects[0],
+            summary.failed_projects.len() - 1
+        )
+    };
+
+    if startup {
+        format!(
+            "State loaded and rescanned {} of {} projects.{}",
+            summary.successful_projects, summary.total_projects, failure_suffix
+        )
+    } else {
+        format!(
+            "Rescanned {} of {} projects.{}",
+            summary.successful_projects, summary.total_projects, failure_suffix
+        )
+    }
+}
 
 pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
     match message {
@@ -68,7 +120,15 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             match result {
                 Ok(state) => {
                     app.apply_loaded_state(state);
-                    app.status = String::from("State loaded");
+                    let summary = app.rescan_all_projects();
+                    app.status = rescan_status(&summary, true);
+                    app.ensure_active_runtime();
+                    app.sync_runtime_views();
+                    return if summary.changed_projects > 0 {
+                        app.save_task()
+                    } else {
+                        Task::none()
+                    };
                 }
                 Err(error) => {
                     app.status = format!("Failed to load state: {error}");
@@ -183,6 +243,19 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 Task::none()
             }
         },
+        Message::RescanAllProjects => {
+            let summary = app.rescan_all_projects();
+            app.project_context_menu = None;
+            app.worktree_context_menu = None;
+            app.status = rescan_status(&summary, false);
+            app.ensure_active_runtime();
+            app.sync_runtime_views();
+            if summary.changed_projects > 0 {
+                app.save_task()
+            } else {
+                Task::none()
+            }
+        }
         Message::SelectProject(project_id) => {
             app.select_project(&project_id);
             app.ensure_active_runtime();
@@ -309,6 +382,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             if open {
                 app.command_palette_open = false;
                 app.quick_open_open = false;
+                app.add_worktree_project_picker_open = false;
+                app.add_worktree_project_selected_index = 0;
+                app.delete_worktree_project_picker_open = false;
+                app.delete_worktree_project_selected_index = 0;
+                app.delete_worktree_picker = None;
                 app.rename_dialog = None;
                 app.add_worktree_dialog = None;
                 app.worktree_context_menu = None;
@@ -323,6 +401,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.command_palette_query.clear();
                 app.command_palette_selected_index = 0;
                 app.quick_open_open = false;
+                app.add_worktree_project_picker_open = false;
+                app.add_worktree_project_selected_index = 0;
+                app.delete_worktree_project_picker_open = false;
+                app.delete_worktree_project_selected_index = 0;
+                app.delete_worktree_picker = None;
                 app.preferences_open = false;
                 app.rename_dialog = None;
                 app.add_worktree_dialog = None;
@@ -382,6 +465,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.quick_open_selected_index = 0;
                 app.quick_open_ignore_next_query_change = false;
                 app.command_palette_open = false;
+                app.add_worktree_project_picker_open = false;
+                app.add_worktree_project_selected_index = 0;
+                app.delete_worktree_project_picker_open = false;
+                app.delete_worktree_project_selected_index = 0;
+                app.delete_worktree_picker = None;
                 app.preferences_open = false;
                 app.rename_dialog = None;
                 app.add_worktree_dialog = None;
@@ -465,6 +553,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.start_rename_worktree(&project_id, &worktree_id);
             app.command_palette_open = false;
             app.quick_open_open = false;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = None;
             app.preferences_open = false;
             app.add_worktree_dialog = None;
             app.worktree_context_menu = None;
@@ -483,6 +576,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.start_rename_focused();
             app.command_palette_open = false;
             app.quick_open_open = false;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = None;
             app.preferences_open = false;
             app.add_worktree_dialog = None;
             app.worktree_context_menu = None;
@@ -501,6 +599,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.start_rename_active_terminal();
             app.command_palette_open = false;
             app.quick_open_open = false;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = None;
             app.preferences_open = false;
             app.add_worktree_dialog = None;
             app.worktree_context_menu = None;
@@ -535,10 +638,250 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.sync_runtime_views();
             Task::none()
         }
+        Message::OpenAddWorktreeProjectPicker => {
+            let entries = app.add_worktree_project_entries();
+            if entries.is_empty() {
+                app.status = String::from("No projects available to add a worktree");
+                return Task::none();
+            }
+
+            let selected_index = app
+                .persisted
+                .active_project_id
+                .as_ref()
+                .and_then(|active_id| {
+                    entries
+                        .iter()
+                        .position(|entry| &entry.project_id == active_id)
+                })
+                .unwrap_or(0);
+
+            app.command_palette_open = false;
+            app.quick_open_open = false;
+            app.preferences_open = false;
+            app.rename_dialog = None;
+            app.add_worktree_dialog = None;
+            app.worktree_context_menu = None;
+            app.project_context_menu = None;
+            app.add_worktree_project_picker_open = true;
+            app.add_worktree_project_selected_index = selected_index;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = None;
+            app.sync_runtime_views();
+
+            operation::snap_to(
+                crate::app::state::ADD_WORKTREE_PROJECT_SCROLL_ID,
+                operation::RelativeOffset {
+                    x: 0.0,
+                    y: if entries.len() <= 1 {
+                        0.0
+                    } else {
+                        selected_index as f32 / (entries.len() - 1) as f32
+                    },
+                },
+            )
+        }
+        Message::AddWorktreeProjectSubmit => {
+            let entries = app.add_worktree_project_entries();
+            let Some(entry) = entries.get(app.add_worktree_project_selected_index) else {
+                return Task::none();
+            };
+
+            update(app, Message::StartAddWorktree(entry.project_id.clone()))
+        }
+        Message::AddWorktreeProjectSelect(index) => {
+            let entries = app.add_worktree_project_entries();
+            let Some(entry) = entries.get(index) else {
+                return Task::none();
+            };
+
+            app.add_worktree_project_selected_index = index;
+            update(app, Message::StartAddWorktree(entry.project_id.clone()))
+        }
+        Message::AddWorktreeProjectCancel => {
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.sync_runtime_views();
+            Task::none()
+        }
+        Message::OpenDeleteWorktreeProjectPicker => {
+            let entries = app.delete_worktree_project_entries();
+            if entries.is_empty() {
+                app.status = String::from("No removable worktrees available");
+                return Task::none();
+            }
+
+            let selected_index = app
+                .persisted
+                .active_project_id
+                .as_ref()
+                .and_then(|active_id| {
+                    entries
+                        .iter()
+                        .position(|entry| &entry.project_id == active_id)
+                })
+                .unwrap_or(0);
+
+            app.command_palette_open = false;
+            app.quick_open_open = false;
+            app.preferences_open = false;
+            app.rename_dialog = None;
+            app.add_worktree_dialog = None;
+            app.worktree_context_menu = None;
+            app.project_context_menu = None;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.delete_worktree_project_picker_open = true;
+            app.delete_worktree_project_selected_index = selected_index;
+            app.delete_worktree_picker = None;
+            app.sync_runtime_views();
+
+            operation::snap_to(
+                crate::app::state::DELETE_WORKTREE_PROJECT_SCROLL_ID,
+                operation::RelativeOffset {
+                    x: 0.0,
+                    y: if entries.len() <= 1 {
+                        0.0
+                    } else {
+                        selected_index as f32 / (entries.len() - 1) as f32
+                    },
+                },
+            )
+        }
+        Message::DeleteWorktreeProjectSubmit => {
+            let entries = app.delete_worktree_project_entries();
+            let Some(entry) = entries.get(app.delete_worktree_project_selected_index) else {
+                return Task::none();
+            };
+
+            update(
+                app,
+                Message::OpenDeleteWorktreePicker(entry.project_id.clone()),
+            )
+        }
+        Message::DeleteWorktreeProjectSelect(index) => {
+            let entries = app.delete_worktree_project_entries();
+            let Some(entry) = entries.get(index) else {
+                return Task::none();
+            };
+
+            app.delete_worktree_project_selected_index = index;
+            update(
+                app,
+                Message::OpenDeleteWorktreePicker(entry.project_id.clone()),
+            )
+        }
+        Message::DeleteWorktreeProjectCancel => {
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.sync_runtime_views();
+            Task::none()
+        }
+        Message::OpenDeleteWorktreePicker(project_id) => {
+            let entries = app.delete_worktree_entries(&project_id);
+            if entries.is_empty() {
+                app.status = String::from("No removable worktrees available in that project");
+                return Task::none();
+            }
+
+            let selected_index = app
+                .active_worktree_ids()
+                .and_then(|(active_project_id, active_worktree_id)| {
+                    (active_project_id == project_id).then(|| {
+                        entries
+                            .iter()
+                            .position(|entry| entry.worktree_id == active_worktree_id)
+                    })?
+                })
+                .unwrap_or(0);
+
+            app.command_palette_open = false;
+            app.quick_open_open = false;
+            app.preferences_open = false;
+            app.rename_dialog = None;
+            app.add_worktree_dialog = None;
+            app.worktree_context_menu = None;
+            app.project_context_menu = None;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = Some(crate::app::state::DeleteWorktreePicker {
+                project_id,
+                selected_index,
+            });
+            app.sync_runtime_views();
+
+            operation::snap_to(
+                crate::app::state::DELETE_WORKTREE_SCROLL_ID,
+                operation::RelativeOffset {
+                    x: 0.0,
+                    y: if entries.len() <= 1 {
+                        0.0
+                    } else {
+                        selected_index as f32 / (entries.len() - 1) as f32
+                    },
+                },
+            )
+        }
+        Message::DeleteWorktreeSubmit => {
+            let Some(picker) = app.delete_worktree_picker.clone() else {
+                return Task::none();
+            };
+            let entries = app.delete_worktree_entries(&picker.project_id);
+            let Some(entry) = entries.get(picker.selected_index) else {
+                return Task::none();
+            };
+
+            update(
+                app,
+                Message::RemoveWorktree {
+                    project_id: entry.project_id.clone(),
+                    worktree_id: entry.worktree_id.clone(),
+                },
+            )
+        }
+        Message::DeleteWorktreeSelect(index) => {
+            let Some(project_id) = app
+                .delete_worktree_picker
+                .as_ref()
+                .map(|picker| picker.project_id.clone())
+            else {
+                return Task::none();
+            };
+
+            if let Some(picker) = app.delete_worktree_picker.as_mut() {
+                picker.selected_index = index;
+            }
+
+            let entries = app.delete_worktree_entries(&project_id);
+            let Some(entry) = entries.get(index) else {
+                return Task::none();
+            };
+
+            update(
+                app,
+                Message::RemoveWorktree {
+                    project_id: entry.project_id.clone(),
+                    worktree_id: entry.worktree_id.clone(),
+                },
+            )
+        }
+        Message::DeleteWorktreeCancel => {
+            app.delete_worktree_picker = None;
+            app.sync_runtime_views();
+            Task::none()
+        }
         Message::StartAddWorktree(project_id) => {
             app.start_add_worktree(&project_id);
             app.command_palette_open = false;
             app.quick_open_open = false;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = None;
             app.preferences_open = false;
             app.rename_dialog = None;
             app.worktree_context_menu = None;
@@ -604,12 +947,18 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             Ok(()) => {
                 app.worktree_context_menu = None;
                 app.project_context_menu = None;
+                app.delete_worktree_project_picker_open = false;
+                app.delete_worktree_project_selected_index = 0;
+                app.delete_worktree_picker = None;
                 app.status = String::from("Worktree removed");
                 app.ensure_active_runtime();
                 app.sync_runtime_views();
                 app.save_task()
             }
             Err(error) => {
+                app.delete_worktree_project_picker_open = false;
+                app.delete_worktree_project_selected_index = 0;
+                app.delete_worktree_picker = None;
                 app.status = format!("Failed to remove worktree: {error}");
                 Task::none()
             }
@@ -638,6 +987,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             });
             app.project_context_menu = None;
             app.quick_open_open = false;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = None;
             app.preferences_open = false;
             app.rename_dialog = None;
             app.add_worktree_dialog = None;
@@ -648,6 +1002,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.project_context_menu = Some(crate::app::state::ProjectContextMenu { project_id });
             app.worktree_context_menu = None;
             app.quick_open_open = false;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = None;
             app.preferences_open = false;
             app.rename_dialog = None;
             app.add_worktree_dialog = None;
@@ -805,6 +1164,9 @@ fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) 
         }
         CommandPaletteAction::OpenPreferences => update(app, Message::OpenPreferences(true)),
         CommandPaletteAction::AddProject => update(app, Message::AddProject),
+        CommandPaletteAction::AddWorktreeToProject => {
+            update(app, Message::OpenAddWorktreeProjectPicker)
+        }
         CommandPaletteAction::AddWorktreeToActiveProject => {
             let Some(project_id) = app.persisted.active_project_id.clone() else {
                 app.status = String::from("No active project to add a worktree to");
@@ -812,6 +1174,10 @@ fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) 
             };
             update(app, Message::StartAddWorktree(project_id))
         }
+        CommandPaletteAction::DeleteWorktreeFromProject => {
+            update(app, Message::OpenDeleteWorktreeProjectPicker)
+        }
+        CommandPaletteAction::RescanAllProjects => update(app, Message::RescanAllProjects),
         CommandPaletteAction::RescanActiveProject => {
             let Some(project_id) = app.persisted.active_project_id.clone() else {
                 app.status = String::from("No active project to rescan");
