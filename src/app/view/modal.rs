@@ -248,7 +248,40 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
         );
     }
 
+    if let Some(_menu) = &app.project_context_menu {
+        let actions = iced::widget::column![
+            text("Project Actions").size(16),
+            button(text("Rescan project").size(12))
+                .style(|_, status| toolbar_button_style(status))
+                .on_press(Message::ProjectContextMenuProjectRescan),
+            button(text("Remove project").size(12))
+                .style(|_, status| subtle_delete_button_style(status))
+                .on_press(Message::ProjectContextMenuRemoveProject),
+            button(text("Close").size(12))
+                .style(|_, status| toolbar_button_style(status))
+                .on_press(Message::CloseProjectContextMenu),
+        ]
+        .spacing(8);
+
+        let panel = container(actions)
+            .padding(12)
+            .width(Length::Fixed(260.0))
+            .style(|_| modal_panel_style());
+
+        return Some(
+            container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| modal_backdrop_style())
+                .into(),
+        );
+    }
+
     if let Some(menu) = &app.worktree_context_menu {
+        let project_id = menu.project_id.clone();
+        let worktree_id = menu.worktree_id.clone();
         let mut actions = iced::widget::column![
             text("Worktree Actions").size(16),
             button(text("New terminal").size(12))
@@ -257,22 +290,14 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
             button(text("Rename worktree").size(12))
                 .style(|_, status| toolbar_button_style(status))
                 .on_press(Message::WorktreeContextMenuRenameWorktree),
+            button(text("Remove worktree").size(12))
+                .style(|_, status| subtle_delete_button_style(status))
+                .on_press(Message::RemoveWorktree {
+                    project_id,
+                    worktree_id,
+                }),
         ]
         .spacing(8);
-
-        if menu.show_project_actions {
-            actions = actions
-                .push(
-                    button(text("Rescan project").size(12))
-                        .style(|_, status| toolbar_button_style(status))
-                        .on_press(Message::WorktreeContextMenuProjectRescan),
-                )
-                .push(
-                    button(text("Remove project").size(12))
-                        .style(|_, status| subtle_delete_button_style(status))
-                        .on_press(Message::WorktreeContextMenuRemoveProject),
-                );
-        }
 
         actions = actions.push(
             button(text("Close").size(12))
@@ -297,38 +322,58 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
     }
 
     if let Some(dialog) = &app.rename_dialog {
-        let title = match dialog.target {
-            crate::app::state::RenameTarget::Worktree { .. } => "Rename Worktree",
-            crate::app::state::RenameTarget::Terminal { .. } => "Rename Terminal",
-            crate::app::state::RenameTarget::DetachedTerminal { .. } => "Rename Terminal",
+        let (title, placeholder, helper_text) = match dialog.target {
+            crate::app::state::RenameTarget::Worktree { .. } => (
+                "Rename Worktree Label",
+                "Worktree label",
+                Some("Shown on the worktree row. The project name stays separate."),
+            ),
+            crate::app::state::RenameTarget::Terminal { .. } => {
+                ("Rename Terminal", "Terminal name", None)
+            }
+            crate::app::state::RenameTarget::DetachedTerminal { .. } => {
+                ("Rename Terminal", "Terminal name", None)
+            }
         };
 
-        let panel = container(
-            iced::widget::column![
-                text(title).size(16),
-                text_input("Name", &dialog.value)
-                    .id("rename-input")
-                    .on_input(Message::RenameValueChanged)
-                    .on_submit(Message::RenameCommit)
-                    .padding(6)
-                    .size(14)
-                    .style(|_, status| input_style(status))
+        let mut content = iced::widget::column![
+            text(title).size(16),
+            text_input(placeholder, &dialog.value)
+                .id("rename-input")
+                .on_input(Message::RenameValueChanged)
+                .on_submit(Message::RenameCommit)
+                .padding(6)
+                .size(14)
+                .style(|_, status| input_style(status))
+                .width(Length::Fill),
+        ]
+        .spacing(8);
+
+        if let Some(helper_text) = helper_text {
+            content = content.push(
+                text(helper_text)
+                    .size(11)
+                    .color(rgb(138, 144, 156))
                     .width(Length::Fill),
-                row![
-                    button(text("Cancel").size(12))
-                        .style(|_, status| toolbar_button_style(status))
-                        .on_press(Message::RenameCancel),
-                    button(text("Save").size(12))
-                        .style(|_, status| toolbar_button_style(status))
-                        .on_press(Message::RenameCommit),
-                ]
-                .spacing(8),
+            );
+        }
+
+        content = content.push(
+            row![
+                button(text("Cancel").size(12))
+                    .style(|_, status| toolbar_button_style(status))
+                    .on_press(Message::RenameCancel),
+                button(text("Save").size(12))
+                    .style(|_, status| toolbar_button_style(status))
+                    .on_press(Message::RenameCommit),
             ]
             .spacing(8),
-        )
-        .padding(12)
-        .width(Length::Fixed(420.0))
-        .style(|_| modal_panel_style());
+        );
+
+        let panel = container(content)
+            .padding(12)
+            .width(Length::Fixed(420.0))
+            .style(|_| modal_panel_style());
 
         return Some(
             container(panel)

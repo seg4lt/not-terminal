@@ -110,7 +110,11 @@ pub(crate) struct AddWorktreeDialog {
 pub(crate) struct WorktreeContextMenu {
     pub(crate) project_id: String,
     pub(crate) worktree_id: String,
-    pub(crate) show_project_actions: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ProjectContextMenu {
+    pub(crate) project_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -207,6 +211,7 @@ pub(crate) struct App {
     pub(crate) rename_dialog: Option<RenameDialog>,
     pub(crate) add_worktree_dialog: Option<AddWorktreeDialog>,
     pub(crate) worktree_context_menu: Option<WorktreeContextMenu>,
+    pub(crate) project_context_menu: Option<ProjectContextMenu>,
     pub(crate) suppress_next_key_release: bool,
     pub(crate) branch_by_terminal: HashMap<String, String>,
     pub(crate) last_branch_refresh_terminal_id: Option<String>,
@@ -296,13 +301,14 @@ pub(crate) enum Message {
     OpenWorktreeContextMenu {
         project_id: String,
         worktree_id: String,
-        show_project_actions: bool,
     },
+    OpenProjectContextMenu(String),
     CloseWorktreeContextMenu,
+    CloseProjectContextMenu,
     WorktreeContextMenuNewTerminal,
     WorktreeContextMenuRenameWorktree,
-    WorktreeContextMenuProjectRescan,
-    WorktreeContextMenuRemoveProject,
+    ProjectContextMenuProjectRescan,
+    ProjectContextMenuRemoveProject,
     AddWorktreeBranchChanged(String),
     AddWorktreePathChanged(String),
     FocusAddWorktreePath,
@@ -360,6 +366,7 @@ impl App {
             rename_dialog: None,
             add_worktree_dialog: None,
             worktree_context_menu: None,
+            project_context_menu: None,
             suppress_next_key_release: false,
             branch_by_terminal: HashMap::new(),
             last_branch_refresh_terminal_id: None,
@@ -1088,41 +1095,44 @@ impl App {
     }
 
     pub(crate) fn filtered_project_indices(&self) -> Vec<usize> {
-        let query = self.filter_query.trim().to_lowercase();
-        if query.is_empty() {
+        let Some(query) = self.normalized_filter_query() else {
             return (0..self.persisted.projects.len()).collect();
-        }
+        };
 
         self.persisted
             .projects
             .iter()
             .enumerate()
             .filter_map(|(index, project)| {
-                let project_match = project.name.to_lowercase().contains(&query);
-                if project_match {
-                    return Some(index);
-                }
-
-                let found = project.worktrees.iter().any(|worktree| {
-                    if format!(
-                        "{} {}",
-                        worktree.name.to_lowercase(),
-                        worktree.path.to_lowercase()
-                    )
-                    .contains(&query)
-                    {
-                        return true;
-                    }
-
-                    worktree
-                        .terminals
-                        .iter()
-                        .any(|terminal| terminal.name.to_lowercase().contains(&query))
-                });
-
-                if found { Some(index) } else { None }
+                Self::project_matches_filter(project, &query).then_some(index)
             })
             .collect()
+    }
+
+    pub(crate) fn normalized_filter_query(&self) -> Option<String> {
+        let query = self.filter_query.trim().to_lowercase();
+        if query.is_empty() { None } else { Some(query) }
+    }
+
+    pub(crate) fn project_matches_filter(project: &ProjectRecord, query: &str) -> bool {
+        project.name.to_lowercase().contains(query)
+            || project
+                .worktrees
+                .iter()
+                .any(|worktree| Self::worktree_matches_filter(worktree, query))
+    }
+
+    pub(crate) fn worktree_matches_filter(worktree: &WorktreeRecord, query: &str) -> bool {
+        format!(
+            "{} {}",
+            worktree.name.to_lowercase(),
+            worktree.path.to_lowercase()
+        )
+        .contains(query)
+            || worktree
+                .terminals
+                .iter()
+                .any(|terminal| terminal.name.to_lowercase().contains(query))
     }
 
     #[allow(dead_code)]
@@ -1369,6 +1379,7 @@ impl App {
             || self.rename_dialog.is_some()
             || self.add_worktree_dialog.is_some()
             || self.worktree_context_menu.is_some()
+            || self.project_context_menu.is_some()
     }
 
     pub(crate) fn select_project(&mut self, project_id: &str) {

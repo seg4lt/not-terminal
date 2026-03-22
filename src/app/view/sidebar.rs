@@ -117,9 +117,31 @@ fn is_main_project_worktree(
     normalize_path_key(git_folder) == normalize_path_key(&worktree.path)
 }
 
+fn tree_letter_chip(label: &'static str, text_color: Color) -> Element<'static, Message> {
+    container(text(label).size(10).color(text_color))
+        .padding([2, 5])
+        .style(|_| chip_style())
+        .into()
+}
+
+fn missing_chip() -> Element<'static, Message> {
+    container(text("!").size(10).color(rgb(220, 150, 150)))
+        .padding([2, 5])
+        .style(|_| ContainerStyle {
+            background: Some(Background::Color(rgb(42, 28, 31))),
+            border: Border {
+                width: 1.0,
+                color: rgb(74, 48, 52),
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
 pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
     let project_indices = app.filtered_project_indices();
-    let mut list = iced::widget::column![].spacing(10).width(Length::Fill);
+    let mut list = iced::widget::column![].spacing(8).width(Length::Fill);
     let active_terminal_id = app.active_terminal_id();
     let detached_active = app.persisted.selected_detached_terminal_id.is_some();
 
@@ -354,7 +376,8 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
 
     // Projects section
     let projects_active = app.persisted.active_project_id.is_some();
-    let all_project_worktrees_expanded = app.all_project_worktrees_expanded();
+    let all_project_trees_expanded = app.all_project_trees_expanded();
+    let filter_query = app.normalized_filter_query();
     let mut projects_column = iced::widget::column![
         container(
             row![
@@ -373,7 +396,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                 .padding([3, 6])
                 .style(|_| subtle_badge_style()),
                 button(
-                    text(if all_project_worktrees_expanded {
+                    text(if all_project_trees_expanded {
                         "Collapse all"
                     } else {
                         "Expand all"
@@ -394,7 +417,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
         .padding([8, 10])
         .style(move |_| project_header_style(projects_active))
     ]
-    .spacing(0);
+    .spacing(6);
 
     if project_indices.is_empty() {
         projects_column = projects_column.push(
@@ -405,266 +428,277 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
     for project_idx in project_indices {
         let project = &app.persisted.projects[project_idx];
         let project_id = project.id.clone();
-        if project.worktrees.is_empty() {
-            projects_column = projects_column.push(
-                container(
-                    row![
-                        container(text("📁").size(11).color(rgb(120, 184, 152)))
-                            .padding([0, 4])
-                            .width(Length::Fixed(16.0)),
-                        container(
-                            iced::widget::column![
-                                text(format!("{}/-", &project.name))
-                                    .size(13)
-                                    .wrapping(Wrapping::None),
-                                text("No worktrees")
-                                    .size(10)
-                                    .color(rgb(140, 146, 158))
-                                    .wrapping(Wrapping::None),
-                            ]
-                            .spacing(1)
-                        )
-                        .width(Length::Fill)
-                        .clip(true),
-                        button(text("⊞").size(10))
-                            .padding([0, 5])
-                            .style(|_, status| subtle_action_button_style(status))
-                            .on_press(Message::StartAddWorktree(project_id.clone())),
-                        button(text("↻").size(10))
-                            .padding([0, 5])
-                            .style(|_, status| subtle_action_button_style(status))
-                            .on_press(Message::ProjectRescan(project_id.clone())),
-                        button(text("🗑").size(10))
-                            .padding([0, 5])
-                            .style(|_, status| subtle_delete_button_style(status))
-                            .on_press(Message::RemoveProject(project_id.clone())),
-                    ]
-                    .spacing(4)
-                    .align_y(Alignment::Center),
-                )
-                .padding([4, 8])
-                .style(|_| worktree_row_style(false)),
-            );
-            continue;
-        }
+        let project_active = app
+            .persisted
+            .active_project_id
+            .as_ref()
+            .is_some_and(|active_id| active_id == &project_id);
+        let project_collapsed = filter_query
+            .as_deref()
+            .is_none_or(|query| !App::project_matches_filter(project, query))
+            && App::project_collapsed(project);
+        let worktree_total = project.worktrees.len();
 
-        for (worktree_index, worktree) in project.worktrees.iter().enumerate() {
-            let worktree_id = worktree.id.clone();
-            let worktree_collapsed = App::worktree_collapsed(project, &worktree_id);
-            let terminal_count = worktree.terminals.len();
-            let worktree_selected = project
-                .selected_terminal_id
-                .as_ref()
-                .is_some_and(|selected| {
-                    worktree
-                        .terminals
-                        .iter()
-                        .any(|terminal| &terminal.id == selected)
-                });
-            let worktree_label = if worktree.missing {
-                format!("{} (missing)", &worktree.name)
-            } else {
-                worktree.name.clone()
-            };
-            let combined_label = format!("{}/{}", &project.name, worktree_label);
-            let main_worktree = is_main_project_worktree(project, worktree);
-            let (worktree_icon, worktree_icon_color) = if main_worktree {
-                ("🏠", rgb(196, 202, 214))
-            } else {
-                ("🗂", rgb(157, 188, 218))
-            };
-
-            let mut worktree_row = row![
-                // Worktree icon
-                container(text(worktree_icon).size(11).color(worktree_icon_color))
-                    .padding([0, 4])
-                    .width(Length::Fixed(16.0)),
-                // Expand/collapse chevron
-                button(text(if worktree_collapsed { "›" } else { "⌄" }).size(16))
-                    .padding([0, 2])
-                    .style(|_, status| chevron_button_style(status))
-                    .on_press(Message::ToggleWorktreeCollapsed {
-                        project_id: project_id.clone(),
-                        worktree_id: worktree_id.clone(),
-                    }),
-                // Combined project/worktree name + metadata
-                button(
-                    container(
-                        iced::widget::column![
-                            text(combined_label).size(13).wrapping(Wrapping::None),
-                        ]
-                        .spacing(1)
-                    )
+        let project_header = row![
+            button(text(if project_collapsed { "›" } else { "⌄" }).size(16))
+                .padding([0, 2])
+                .style(|_, status| chevron_button_style(status))
+                .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
+            button(
+                container(text(&project.name).size(13).wrapping(Wrapping::None))
                     .width(Length::Fill)
                     .clip(true)
-                )
-                .padding([3, 4])
-                .style(move |_, status| tree_main_button_style(status, worktree_selected))
-                .width(Length::Fill)
-                .on_press(Message::ToggleWorktreeCollapsed {
-                    project_id: project_id.clone(),
-                    worktree_id: worktree_id.clone(),
-                }),
-                // Terminal count badge
-                container(
-                    text(format!("{}", terminal_count))
-                        .size(10)
-                        .color(rgb(135, 142, 153))
-                )
-                .padding([2, 5])
-                .style(|_| subtle_badge_style()),
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center);
+            )
+            .padding([4, 4])
+            .style(move |_, status| tree_main_button_style(status, project_active))
+            .width(Length::Fill)
+            .on_press(Message::SelectProject(project_id.clone())),
+            container(
+                text(format!("{}", worktree_total))
+                    .size(10)
+                    .color(rgb(135, 142, 153))
+            )
+            .padding([2, 5])
+            .style(|_| subtle_badge_style()),
+            button(text("+").size(12))
+                .padding([0, 5])
+                .style(|_, status| subtle_action_button_style(status))
+                .on_press(Message::StartAddWorktree(project_id.clone())),
+            button(text("⋯").size(13))
+                .padding([0, 5])
+                .style(|_, status| subtle_action_button_style(status))
+                .on_press(Message::OpenProjectContextMenu(project_id.clone())),
+        ]
+        .spacing(5)
+        .align_y(Alignment::Center);
 
-            if worktree_index == 0 {
-                worktree_row = worktree_row.push(
-                    button(text("⊞").size(10))
-                        .padding([0, 5])
-                        .style(|_, status| subtle_action_button_style(status))
-                        .on_press(Message::StartAddWorktree(project_id.clone())),
+        let mut project_card = iced::widget::column![
+            container(project_header)
+                .padding([4, 8])
+                .style(move |_| project_header_style(project_active))
+        ]
+        .spacing(0);
+
+        if !project_collapsed {
+            let mut worktree_list = iced::widget::column![].spacing(3);
+
+            if project.worktrees.is_empty() {
+                worktree_list = worktree_list.push(
+                    container(text("No worktrees").size(11).color(rgb(130, 135, 145)))
+                        .padding([10, 14])
+                        .style(|_| empty_state_style()),
                 );
-            }
+            } else {
+                for worktree in &project.worktrees {
+                    let worktree_id = worktree.id.clone();
+                    let worktree_collapsed = filter_query
+                        .as_deref()
+                        .is_none_or(|query| !App::worktree_matches_filter(worktree, query))
+                        && App::worktree_collapsed(project, &worktree_id);
+                    let terminal_count = worktree.terminals.len();
+                    let worktree_selected =
+                        project
+                            .selected_terminal_id
+                            .as_ref()
+                            .is_some_and(|selected| {
+                                worktree
+                                    .terminals
+                                    .iter()
+                                    .any(|terminal| &terminal.id == selected)
+                            });
+                    let main_worktree = is_main_project_worktree(project, worktree);
 
-            worktree_row = worktree_row
-                .push(
-                    button(text("⋯").size(13))
-                        .padding([0, 5])
-                        .style(|_, status| subtle_action_button_style(status))
-                        .on_press(Message::OpenWorktreeContextMenu {
-                            project_id: project_id.clone(),
-                            worktree_id: worktree_id.clone(),
-                            show_project_actions: worktree_index == 0,
-                        }),
-                )
-                .push(
-                    button(text("×").size(13))
-                        .padding([0, 5])
-                        .style(|_, status| subtle_delete_button_style(status))
-                        .on_press(Message::RemoveWorktree {
-                            project_id: project_id.clone(),
-                            worktree_id: worktree_id.clone(),
-                        }),
-                );
+                    let mut worktree_label_row = row![if main_worktree {
+                        tree_letter_chip("M", rgb(219, 225, 235))
+                    } else {
+                        tree_letter_chip("W", rgb(184, 214, 240))
+                    }]
+                    .spacing(6)
+                    .align_y(Alignment::Center);
 
-            projects_column = projects_column.push(
-                container(worktree_row)
-                    .padding([4, 8])
-                    .style(move |_| worktree_row_style(worktree_selected)),
-            );
+                    if worktree.missing {
+                        worktree_label_row = worktree_label_row.push(missing_chip());
+                    }
 
-            if !worktree_collapsed {
-                for terminal in &worktree.terminals {
-                    let terminal_id = terminal.id.clone();
-                    let terminal_id_for_action = terminal_id.clone();
-                    let terminal_active = active_terminal_id
-                        .as_ref()
-                        .is_some_and(|active| active == &terminal_id);
-                    let terminal_has_splits = app.terminal_has_splits(&terminal_id);
+                    worktree_label_row = worktree_label_row
+                        .push(text(&worktree.name).size(13).wrapping(Wrapping::None));
 
-                    // Get status-based indicator
-                    let (status_symbol, status_color) =
-                        terminal_status_indicator(app, &terminal_id, terminal_active);
-                    let border_color =
-                        terminal_status_border_color(app, &terminal_id, terminal_active);
-
-                    projects_column = projects_column.push(
+                    let worktree_row = row![
+                        container("").width(Length::Fixed(8.0)),
+                        button(text(if worktree_collapsed { "›" } else { "⌄" }).size(16))
+                            .padding([0, 2])
+                            .style(|_, status| chevron_button_style(status))
+                            .on_press(Message::ToggleWorktreeCollapsed {
+                                project_id: project_id.clone(),
+                                worktree_id: worktree_id.clone(),
+                            }),
+                        button(container(worktree_label_row).width(Length::Fill).clip(true))
+                            .padding([3, 4])
+                            .style(move |_, status| tree_main_button_style(
+                                status,
+                                worktree_selected
+                            ))
+                            .width(Length::Fill)
+                            .on_press(Message::ToggleWorktreeCollapsed {
+                                project_id: project_id.clone(),
+                                worktree_id: worktree_id.clone(),
+                            }),
                         container(
-                            row![
-                                // Left border for terminal row
-                                container("")
-                                    .width(Length::Fixed(2.0))
-                                    .height(Length::Fill)
-                                    .style(move |_| ContainerStyle {
-                                        background: Some(Background::Color(border_color)),
-                                        ..Default::default()
-                                    }),
-                                // Status indicator
-                                container(text(status_symbol).size(7).color(status_color))
-                                    .padding([0, 4])
-                                    .width(Length::Fixed(16.0)),
-                                // Terminal name (with exit code badge if error)
-                                {
-                                    let name_element =
-                                        text(&terminal.name).size(12).wrapping(Wrapping::None);
-                                    let mut name_with_badge = row![
-                                        container(name_element).width(Length::Fill).clip(true)
+                            text(format!("{}", terminal_count))
+                                .size(10)
+                                .color(rgb(135, 142, 153))
+                        )
+                        .padding([2, 5])
+                        .style(|_| subtle_badge_style()),
+                        button(text("⋯").size(13))
+                            .padding([0, 5])
+                            .style(|_, status| subtle_action_button_style(status))
+                            .on_press(Message::OpenWorktreeContextMenu {
+                                project_id: project_id.clone(),
+                                worktree_id: worktree_id.clone(),
+                            }),
+                    ]
+                    .spacing(5)
+                    .align_y(Alignment::Center);
+
+                    worktree_list = worktree_list.push(
+                        container(worktree_row)
+                            .padding([2, 6])
+                            .style(move |_| worktree_row_style(worktree_selected)),
+                    );
+
+                    if !worktree_collapsed {
+                        let mut terminals_column = iced::widget::column![].spacing(3);
+
+                        for terminal in &worktree.terminals {
+                            let terminal_id = terminal.id.clone();
+                            let terminal_id_for_action = terminal_id.clone();
+                            let terminal_active = active_terminal_id
+                                .as_ref()
+                                .is_some_and(|active| active == &terminal_id);
+                            let terminal_has_splits = app.terminal_has_splits(&terminal_id);
+
+                            let (status_symbol, status_color) =
+                                terminal_status_indicator(app, &terminal_id, terminal_active);
+                            let border_color =
+                                terminal_status_border_color(app, &terminal_id, terminal_active);
+
+                            terminals_column = terminals_column.push(
+                                container(
+                                    row![
+                                        container("").width(Length::Fixed(26.0)),
+                                        container("")
+                                            .width(Length::Fixed(2.0))
+                                            .height(Length::Fill)
+                                            .style(move |_| ContainerStyle {
+                                                background: Some(Background::Color(border_color)),
+                                                ..Default::default()
+                                            }),
+                                        container(text(status_symbol).size(7).color(status_color))
+                                            .padding([0, 4])
+                                            .width(Length::Fixed(16.0)),
+                                        {
+                                            let name_element = text(&terminal.name)
+                                                .size(12)
+                                                .wrapping(Wrapping::None);
+                                            let mut name_with_badge = row![
+                                                container(name_element)
+                                                    .width(Length::Fill)
+                                                    .clip(true)
+                                            ]
+                                            .spacing(4)
+                                            .width(Length::Fill);
+
+                                            if terminal_has_splits {
+                                                name_with_badge = name_with_badge.push(
+                                                    container(
+                                                        text("◫").size(9).color(rgb(176, 188, 212)),
+                                                    )
+                                                    .padding([1, 4])
+                                                    .style(|_| subtle_badge_style()),
+                                                );
+                                            }
+
+                                            if let Some(working_badge) =
+                                                terminal_working_badge(app, &terminal_id)
+                                            {
+                                                name_with_badge =
+                                                    name_with_badge.push(working_badge);
+                                            }
+
+                                            if let TerminalStatus::Error(code) =
+                                                app.get_terminal_status(&terminal_id)
+                                            {
+                                                name_with_badge = name_with_badge.push(
+                                                    container(
+                                                        text(format!("{}", code))
+                                                            .size(9)
+                                                            .color(rgb(220, 80, 80)),
+                                                    )
+                                                    .padding([1, 4])
+                                                    .style(|_| ContainerStyle {
+                                                        background: Some(Background::Color(rgb(
+                                                            40, 30, 32,
+                                                        ))),
+                                                        border: Border {
+                                                            width: 1.0,
+                                                            color: rgb(70, 50, 54),
+                                                            radius: 8.0.into(),
+                                                        },
+                                                        ..Default::default()
+                                                    }),
+                                                );
+                                            }
+
+                                            button(
+                                                container(name_with_badge)
+                                                    .width(Length::Fill)
+                                                    .clip(true),
+                                            )
+                                            .padding([2, 4])
+                                            .style(move |_, status| {
+                                                terminal_button_style(status, terminal_active)
+                                            })
+                                            .width(Length::Fill)
+                                            .on_press(
+                                                Message::SelectTerminal {
+                                                    project_id: project_id.clone(),
+                                                    terminal_id: terminal_id.clone(),
+                                                },
+                                            )
+                                        },
+                                        button(text("×").size(12))
+                                            .padding([0, 5])
+                                            .style(|_, status| subtle_delete_button_style(status))
+                                            .on_press(Message::RemoveTerminal {
+                                                project_id: project_id.clone(),
+                                                worktree_id: worktree_id.clone(),
+                                                terminal_id: terminal_id_for_action,
+                                            }),
                                     ]
                                     .spacing(4)
-                                    .width(Length::Fill);
+                                    .align_y(Alignment::Center),
+                                )
+                                .padding([2, 6])
+                                .style(move |_| terminal_row_style(terminal_active)),
+                            );
+                        }
 
-                                    if terminal_has_splits {
-                                        name_with_badge = name_with_badge.push(
-                                            container(text("◫").size(9).color(rgb(176, 188, 212)))
-                                                .padding([1, 4])
-                                                .style(|_| subtle_badge_style()),
-                                        );
-                                    }
-
-                                    if let Some(working_badge) =
-                                        terminal_working_badge(app, &terminal_id)
-                                    {
-                                        name_with_badge = name_with_badge.push(working_badge);
-                                    }
-
-                                    if let TerminalStatus::Error(code) =
-                                        app.get_terminal_status(&terminal_id)
-                                    {
-                                        name_with_badge =
-                                            name_with_badge.push(
-                                                container(
-                                                    text(format!("{}", code))
-                                                        .size(9)
-                                                        .color(rgb(220, 80, 80)),
-                                                )
-                                                .padding([1, 4])
-                                                .style(|_| ContainerStyle {
-                                                    background: Some(Background::Color(rgb(
-                                                        40, 30, 32,
-                                                    ))),
-                                                    border: Border {
-                                                        width: 1.0,
-                                                        color: rgb(70, 50, 54),
-                                                        radius: 8.0.into(),
-                                                    },
-                                                    ..Default::default()
-                                                }),
-                                            );
-                                    }
-                                    button(
-                                        container(name_with_badge).width(Length::Fill).clip(true),
-                                    )
-                                    .padding([2, 4])
-                                    .style(move |_, status| {
-                                        terminal_button_style(status, terminal_active)
-                                    })
-                                    .width(Length::Fill)
-                                    .on_press(
-                                        Message::SelectTerminal {
-                                            project_id: project_id.clone(),
-                                            terminal_id: terminal_id.clone(),
-                                        },
-                                    )
-                                },
-                                // Delete button
-                                button(text("×").size(12))
-                                    .padding([0, 5])
-                                    .style(|_, status| subtle_delete_button_style(status))
-                                    .on_press(Message::RemoveTerminal {
-                                        project_id: project_id.clone(),
-                                        worktree_id: worktree_id.clone(),
-                                        terminal_id: terminal_id_for_action,
-                                    }),
-                            ]
-                            .spacing(4)
-                            .align_y(Alignment::Center),
-                        )
-                        .padding([3, 8])
-                        .style(move |_| terminal_row_style(terminal_active)),
-                    );
+                        worktree_list = worktree_list.push(
+                            container(terminals_column)
+                                .padding([0, 0])
+                                .width(Length::Fill),
+                        );
+                    }
                 }
             }
+
+            project_card =
+                project_card.push(container(worktree_list).padding([4, 6]).width(Length::Fill));
         }
+
+        projects_column =
+            projects_column.push(container(project_card).style(|_| project_group_style()));
     }
 
     list = list.push(container(projects_column).style(|_| project_group_style()));

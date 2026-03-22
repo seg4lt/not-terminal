@@ -311,6 +311,9 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
         ShortcutAction::PreviousTerminal => super::update(app, Message::SwitchTerminalByOffset(-1)),
         ShortcutAction::ModalCancel => {
             app.suppress_next_key_release = true;
+            if app.project_context_menu.is_some() {
+                return super::update(app, Message::CloseProjectContextMenu);
+            }
             if app.worktree_context_menu.is_some() {
                 return super::update(app, Message::CloseWorktreeContextMenu);
             }

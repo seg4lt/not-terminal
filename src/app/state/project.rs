@@ -268,12 +268,17 @@ impl App {
         }
     }
 
-    pub(crate) fn all_project_worktrees_expanded(&self) -> bool {
-        let mut has_any_worktrees = false;
+    pub(crate) fn all_project_trees_expanded(&self) -> bool {
+        let mut has_any_projects = false;
 
         for project in &self.persisted.projects {
+            has_any_projects = true;
+
+            if crate::app::state::App::project_collapsed(project) {
+                return false;
+            }
+
             for worktree in &project.worktrees {
-                has_any_worktrees = true;
                 if project
                     .tree_state
                     .collapsed_worktrees
@@ -285,14 +290,15 @@ impl App {
             }
         }
 
-        has_any_worktrees
+        has_any_projects
     }
 
     pub(crate) fn toggle_all_project_trees_collapsed(&mut self) {
-        let collapse_all = self.all_project_worktrees_expanded();
+        let collapse_all = self.all_project_trees_expanded();
 
         for project in &mut self.persisted.projects {
             if collapse_all {
+                project.tree_state.collapsed_projects = vec![project.id.clone()];
                 project.tree_state.collapsed_worktrees = project
                     .worktrees
                     .iter()
