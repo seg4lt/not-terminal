@@ -8,6 +8,7 @@ pub(crate) enum ShortcutAction {
     NewDetachedTerminal,
     CloseActiveTerminal,
     OpenInPreferredEditor,
+    OpenInSecondaryEditor,
     OpenQuickOpen,
     OpenCommandPalette,
     OpenPreferences,
@@ -126,6 +127,10 @@ pub(crate) fn detect_shortcut(
 
         if is_key_t(key_char.as_deref(), physical_key) {
             return Some(ShortcutAction::NewDetachedTerminal);
+        }
+
+        if is_key_o(key_char.as_deref(), physical_key) {
+            return Some(ShortcutAction::OpenInSecondaryEditor);
         }
 
         if is_bracket_right(key_char.as_deref(), physical_key) {

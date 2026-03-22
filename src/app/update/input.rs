@@ -63,6 +63,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
                 | ShortcutAction::NewDetachedTerminal
                 | ShortcutAction::CloseActiveTerminal
                 | ShortcutAction::OpenInPreferredEditor
+                | ShortcutAction::OpenInSecondaryEditor
                 | ShortcutAction::OpenQuickOpen
                 | ShortcutAction::OpenCommandPalette
                 | ShortcutAction::OpenPreferences
@@ -279,6 +280,7 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
         ShortcutAction::NewDetachedTerminal => super::update(app, Message::AddDetachedTerminal),
         ShortcutAction::CloseActiveTerminal => super::update(app, Message::CloseActiveTerminal),
         ShortcutAction::OpenInPreferredEditor => super::update(app, Message::OpenInPreferredEditor),
+        ShortcutAction::OpenInSecondaryEditor => super::update(app, Message::OpenInSecondaryEditor),
         ShortcutAction::OpenQuickOpen => {
             super::update(app, Message::OpenQuickOpen(!app.quick_open_open))
         }

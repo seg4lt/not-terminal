@@ -47,6 +47,8 @@ pub(crate) struct UiState {
     pub(crate) enable_browsers: bool,
     #[serde(default)]
     pub(crate) preferred_editor_command: String,
+    #[serde(default)]
+    pub(crate) secondary_editor_command: String,
 }
 
 impl Default for UiState {
@@ -57,6 +59,7 @@ impl Default for UiState {
             sidebar_width: default_sidebar_width(),
             enable_browsers: default_enable_browsers(),
             preferred_editor_command: String::new(),
+            secondary_editor_command: String::new(),
         }
     }
 }

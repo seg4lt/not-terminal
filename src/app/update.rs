@@ -202,6 +202,10 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.persisted.ui.preferred_editor_command = value;
             app.save_task()
         }
+        Message::SetSecondaryEditorCommand(value) => {
+            app.persisted.ui.secondary_editor_command = value;
+            app.save_task()
+        }
         Message::FilterChanged(value) => {
             app.filter_query = value;
             Task::none()
@@ -314,33 +318,12 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
         }
         Message::OpenInPreferredEditor => {
-            let editor_command = app.persisted.ui.preferred_editor_command.trim();
-            if editor_command.is_empty() {
-                app.status = String::from("Set a preferred editor command in Preferences");
-                return Task::none();
-            }
-
-            if editor_command.chars().any(char::is_whitespace) {
-                app.status =
-                    String::from("Preferred editor must be a single command like zed or code");
-                return Task::none();
-            }
-
-            let Some(target_path) = app.active_editor_target_path() else {
-                app.status = String::from("No active worktree folder to open");
-                return Task::none();
-            };
-
-            match open_in_preferred_editor(editor_command, &target_path) {
-                Ok(()) => {
-                    app.status = format!("Opened {} in {}", target_path, editor_command);
-                }
-                Err(error) => {
-                    app.status = format!("Failed to open editor: {error}");
-                }
-            }
-
-            Task::none()
+            let editor_command = app.persisted.ui.preferred_editor_command.clone();
+            open_active_worktree_in_editor(app, editor_command.trim(), "preferred")
+        }
+        Message::OpenInSecondaryEditor => {
+            let editor_command = app.persisted.ui.secondary_editor_command.clone();
+            open_active_worktree_in_editor(app, editor_command.trim(), "secondary")
         }
         Message::SelectTerminal {
             project_id,
@@ -1328,7 +1311,42 @@ fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) 
     }
 }
 
-fn open_in_preferred_editor(editor_command: &str, target_path: &str) -> Result<(), String> {
+fn open_active_worktree_in_editor(
+    app: &mut App,
+    editor_command: &str,
+    editor_label: &str,
+) -> Task<Message> {
+    if editor_command.is_empty() {
+        app.status = format!("Set a {editor_label} editor command in Preferences");
+        return Task::none();
+    }
+
+    if editor_command.chars().any(char::is_whitespace) {
+        app.status = format!(
+            "{} editor must be a single command like zed or code",
+            capitalize(editor_label)
+        );
+        return Task::none();
+    }
+
+    let Some(target_path) = app.active_editor_target_path() else {
+        app.status = String::from("No active worktree folder to open");
+        return Task::none();
+    };
+
+    match open_in_editor_command(editor_command, &target_path) {
+        Ok(()) => {
+            app.status = format!("Opened {} in {}", target_path, editor_command);
+        }
+        Err(error) => {
+            app.status = format!("Failed to open editor: {error}");
+        }
+    }
+
+    Task::none()
+}
+
+fn open_in_editor_command(editor_command: &str, target_path: &str) -> Result<(), String> {
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -1365,4 +1383,14 @@ fn open_in_preferred_editor(editor_command: &str, target_path: &str) -> Result<(
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("could not launch {}: {}", editor_command, error))
+}
+
+fn capitalize(value: &str) -> String {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    let mut output = first.to_uppercase().collect::<String>();
+    output.push_str(chars.as_str());
+    output
 }

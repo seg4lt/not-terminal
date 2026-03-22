@@ -771,6 +771,13 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                     .size(13)
                     .style(|_, status| input_style(status))
                     .width(Length::Fill),
+                text("Secondary editor command").size(13),
+                text_input("code", &app.persisted.ui.secondary_editor_command)
+                    .on_input(Message::SetSecondaryEditorCommand)
+                    .padding(6)
+                    .size(13)
+                    .style(|_, status| input_style(status))
+                    .width(Length::Fill),
                 text("Examples: zed, code, idea")
                     .size(11)
                     .color(rgb(138, 144, 156)),
@@ -780,6 +787,7 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 text("Cmd+Shift+T: New detached terminal").size(12),
                 text("Cmd+W: Close active terminal").size(12),
                 text("Cmd+O: Open active worktree in preferred editor").size(12),
+                text("Cmd+Shift+O: Open active worktree in secondary editor").size(12),
                 text("Cmd+P: Quick open").size(12),
                 text("Cmd+Shift+P: Command palette").size(12),
                 text("Cmd+Option+Shift+O: Toggle app focus").size(12),

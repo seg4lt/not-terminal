@@ -316,6 +316,7 @@ pub(crate) enum Message {
     SetShowNativeTitleBar(bool),
     SetEnableBrowsers(bool),
     SetPreferredEditorCommand(String),
+    SetSecondaryEditorCommand(String),
     FilterChanged(String),
     AddProject,
     ProjectRescan(String),
@@ -336,6 +337,7 @@ pub(crate) enum Message {
     AddDetachedTerminal,
     CloseActiveTerminal,
     OpenInPreferredEditor,
+    OpenInSecondaryEditor,
     SelectTerminal {
         project_id: String,
         terminal_id: String,
@@ -555,6 +557,7 @@ impl App {
             sidebar_width: self.sidebar_width,
             enable_browsers: self.persisted.ui.enable_browsers,
             preferred_editor_command: self.persisted.ui.preferred_editor_command.clone(),
+            secondary_editor_command: self.persisted.ui.secondary_editor_command.clone(),
         };
 
         Task::perform(

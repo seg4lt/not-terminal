@@ -301,7 +301,7 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
   return true;
 }
 
-static void rust_ghostty_read_clipboard_cb(void *userdata,
+static bool rust_ghostty_read_clipboard_cb(void *userdata,
                                            ghostty_clipboard_e location,
                                            void *state) {
   (void)location;
@@ -309,12 +309,12 @@ static void rust_ghostty_read_clipboard_cb(void *userdata,
   rust_ghostty_runtime_bundle_t *bundle =
       (rust_ghostty_runtime_bundle_t *)userdata;
   if (bundle == NULL) {
-    return;
+    return false;
   }
 
   ghostty_surface_t surface = (ghostty_surface_t)bundle->surface;
   if (surface == NULL) {
-    return;
+    return false;
   }
 
   NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
@@ -325,6 +325,7 @@ static void rust_ghostty_read_clipboard_cb(void *userdata,
 
   // Complete the clipboard request with the data
   ghostty_surface_complete_clipboard_request(surface, [content UTF8String], state, false);
+  return true;
 }
 
 static void rust_ghostty_confirm_read_clipboard_cb(
