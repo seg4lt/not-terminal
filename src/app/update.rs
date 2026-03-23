@@ -1,8 +1,8 @@
 use super::state::{App, Message};
 use crate::app::shortcuts::ShortcutAction;
 use crate::app::state::{
-    COMMAND_PALETTE_SCROLL_ID, CommandPaletteAction, ProjectRescanSummary, QUICK_OPEN_SCROLL_ID,
-    QuickOpenEntry, QuickOpenEntryKind,
+    AddProjectOutcome, COMMAND_PALETTE_SCROLL_ID, CommandPaletteAction, ProjectRescanSummary,
+    QUICK_OPEN_SCROLL_ID, QuickOpenEntry, QuickOpenEntryKind,
 };
 use crate::ghostty_embed::{
     disable_system_hide_shortcuts, register_focus_toggle_hotkey, take_pending_attention_badge_click,
@@ -221,8 +221,14 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
             let path_str = path.to_string_lossy().to_string();
             match app.add_project_from_git_folder(&path_str) {
-                Ok(()) => {
-                    app.status = format!("Added project {}", path_str);
+                Ok(AddProjectOutcome::Added { path }) => {
+                    app.status = format!("Added project {}", path);
+                    app.ensure_active_runtime();
+                    app.sync_runtime_views();
+                    app.save_task()
+                }
+                Ok(AddProjectOutcome::AlreadyExists { project_name }) => {
+                    app.status = format!("Project already added: {}", project_name);
                     app.ensure_active_runtime();
                     app.sync_runtime_views();
                     app.save_task()
@@ -768,6 +774,75 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.sync_runtime_views();
             Task::none()
         }
+        Message::OpenRemoveProjectPicker => {
+            let entries = app.remove_project_entries();
+            if entries.is_empty() {
+                app.status = String::from("No projects available to remove");
+                return Task::none();
+            }
+
+            let selected_index = app
+                .persisted
+                .active_project_id
+                .as_ref()
+                .and_then(|active_id| {
+                    entries
+                        .iter()
+                        .position(|entry| &entry.project_id == active_id)
+                })
+                .unwrap_or(0);
+
+            app.command_palette_open = false;
+            app.quick_open_open = false;
+            app.preferences_open = false;
+            app.rename_dialog = None;
+            app.add_worktree_dialog = None;
+            app.worktree_context_menu = None;
+            app.project_context_menu = None;
+            app.add_worktree_project_picker_open = false;
+            app.add_worktree_project_selected_index = 0;
+            app.remove_project_picker_open = true;
+            app.remove_project_selected_index = selected_index;
+            app.delete_worktree_project_picker_open = false;
+            app.delete_worktree_project_selected_index = 0;
+            app.delete_worktree_picker = None;
+            app.sync_runtime_views();
+
+            operation::snap_to(
+                crate::app::state::REMOVE_PROJECT_SCROLL_ID,
+                operation::RelativeOffset {
+                    x: 0.0,
+                    y: if entries.len() <= 1 {
+                        0.0
+                    } else {
+                        selected_index as f32 / (entries.len() - 1) as f32
+                    },
+                },
+            )
+        }
+        Message::RemoveProjectSubmit => {
+            let entries = app.remove_project_entries();
+            let Some(entry) = entries.get(app.remove_project_selected_index) else {
+                return Task::none();
+            };
+
+            update(app, Message::RemoveProject(entry.project_id.clone()))
+        }
+        Message::RemoveProjectSelect(index) => {
+            let entries = app.remove_project_entries();
+            let Some(entry) = entries.get(index) else {
+                return Task::none();
+            };
+
+            app.remove_project_selected_index = index;
+            update(app, Message::RemoveProject(entry.project_id.clone()))
+        }
+        Message::RemoveProjectCancel => {
+            app.remove_project_picker_open = false;
+            app.remove_project_selected_index = 0;
+            app.sync_runtime_views();
+            Task::none()
+        }
         Message::OpenDeleteWorktreeProjectPicker => {
             let entries = app.delete_worktree_project_entries();
             if entries.is_empty() {
@@ -1030,12 +1105,16 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             Ok(()) => {
                 app.project_context_menu = None;
                 app.worktree_context_menu = None;
+                app.remove_project_picker_open = false;
+                app.remove_project_selected_index = 0;
                 app.status = String::from("Project removed");
                 app.ensure_active_runtime();
                 app.sync_runtime_views();
                 app.save_task()
             }
             Err(error) => {
+                app.remove_project_picker_open = false;
+                app.remove_project_selected_index = 0;
                 app.status = format!("Failed to remove project: {error}");
                 Task::none()
             }
@@ -1282,6 +1361,7 @@ fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) 
             };
             update(app, Message::StartAddWorktree(project_id))
         }
+        CommandPaletteAction::RemoveProject => update(app, Message::OpenRemoveProjectPicker),
         CommandPaletteAction::DeleteWorktreeFromProject => {
             update(app, Message::OpenDeleteWorktreeProjectPicker)
         }

@@ -2,7 +2,7 @@ use crate::app::shortcuts::{ShortcutAction, detect_shortcut};
 use crate::app::state::{
     ADD_WORKTREE_PROJECT_SCROLL_ID, App, COMMAND_PALETTE_SCROLL_ID,
     DELETE_WORKTREE_PROJECT_SCROLL_ID, DELETE_WORKTREE_SCROLL_ID, Message, QUICK_OPEN_SCROLL_ID,
-    QuickOpenEntryKind, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN,
+    QuickOpenEntryKind, REMOVE_PROJECT_SCROLL_ID, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN,
 };
 use iced::{Task, keyboard, mouse, widget::operation};
 use std::time::Instant;
@@ -329,6 +329,9 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
             if app.delete_worktree_project_picker_open {
                 return super::update(app, Message::DeleteWorktreeProjectCancel);
             }
+            if app.remove_project_picker_open {
+                return super::update(app, Message::RemoveProjectCancel);
+            }
             if app.add_worktree_project_picker_open {
                 return super::update(app, Message::AddWorktreeProjectCancel);
             }
@@ -362,6 +365,9 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
             }
             if app.delete_worktree_project_picker_open {
                 return super::update(app, Message::DeleteWorktreeProjectSubmit);
+            }
+            if app.remove_project_picker_open {
+                return super::update(app, Message::RemoveProjectSubmit);
             }
             if app.add_worktree_project_picker_open {
                 return super::update(app, Message::AddWorktreeProjectSubmit);
@@ -410,6 +416,17 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
                 modal_selection_scroll_task(
                     DELETE_WORKTREE_PROJECT_SCROLL_ID,
                     app.delete_worktree_project_selected_index,
+                    entries.len(),
+                )
+            } else if app.remove_project_picker_open {
+                let entries = app.remove_project_entries();
+                if !entries.is_empty() {
+                    app.remove_project_selected_index =
+                        (app.remove_project_selected_index + 1) % entries.len();
+                }
+                modal_selection_scroll_task(
+                    REMOVE_PROJECT_SCROLL_ID,
+                    app.remove_project_selected_index,
                     entries.len(),
                 )
             } else if app.add_worktree_project_picker_open {
@@ -489,6 +506,21 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
                 modal_selection_scroll_task(
                     DELETE_WORKTREE_PROJECT_SCROLL_ID,
                     app.delete_worktree_project_selected_index,
+                    entries.len(),
+                )
+            } else if app.remove_project_picker_open {
+                let entries = app.remove_project_entries();
+                if !entries.is_empty() {
+                    let count = entries.len();
+                    app.remove_project_selected_index = if app.remove_project_selected_index == 0 {
+                        count - 1
+                    } else {
+                        app.remove_project_selected_index - 1
+                    };
+                }
+                modal_selection_scroll_task(
+                    REMOVE_PROJECT_SCROLL_ID,
+                    app.remove_project_selected_index,
                     entries.len(),
                 )
             } else if app.add_worktree_project_picker_open {

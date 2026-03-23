@@ -5,24 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) fn scan_worktrees(git_folder: &str) -> Result<Vec<WorktreeInfo>, String> {
-    let repo_root = normalize_path(&PathBuf::from(git_folder))?;
-    if !repo_root.exists() {
-        return Err(format!(
-            "git folder does not exist: {}",
-            repo_root.display()
-        ));
-    }
-
-    let git_meta = repo_root.join(".git");
-    if !git_meta.exists() {
-        return Err(format!(
-            "selected folder is not a git repository root (missing .git): {}",
-            repo_root.display()
-        ));
-    }
-
-    let git_dir = resolve_git_dir(&repo_root, &git_meta)?;
-    let common_git_dir = resolve_common_git_dir(&git_dir)?;
+    let (repo_root, common_git_dir) = resolve_repo_root_and_common_git_dir(git_folder)?;
 
     let mut seen_paths = HashSet::<String>::new();
     let mut worktrees = Vec::<WorktreeInfo>::new();
@@ -83,6 +66,16 @@ pub(crate) fn scan_worktrees(git_folder: &str) -> Result<Vec<WorktreeInfo>, Stri
     }
 
     Ok(worktrees)
+}
+
+pub(crate) fn normalize_git_folder_path(git_folder: &str) -> Result<String, String> {
+    let (repo_root, _) = resolve_repo_root_and_common_git_dir(git_folder)?;
+    Ok(repo_root.to_string_lossy().to_string())
+}
+
+pub(crate) fn resolve_project_identity(git_folder: &str) -> Result<String, String> {
+    let (_, common_git_dir) = resolve_repo_root_and_common_git_dir(git_folder)?;
+    Ok(common_git_dir.to_string_lossy().to_string())
 }
 
 pub(crate) fn add_worktree(
@@ -190,6 +183,29 @@ fn push_worktree(
         path: normalized_path,
         missing: !root_path.exists(),
     });
+}
+
+fn resolve_repo_root_and_common_git_dir(git_folder: &str) -> Result<(PathBuf, PathBuf), String> {
+    let repo_root = normalize_path(&PathBuf::from(git_folder))?;
+    if !repo_root.exists() {
+        return Err(format!(
+            "git folder does not exist: {}",
+            repo_root.display()
+        ));
+    }
+
+    let git_meta = repo_root.join(".git");
+    if !git_meta.exists() {
+        return Err(format!(
+            "selected folder is not a git repository root (missing .git): {}",
+            repo_root.display()
+        ));
+    }
+
+    let git_dir = resolve_git_dir(&repo_root, &git_meta)?;
+    let common_git_dir = resolve_common_git_dir(&git_dir)?;
+
+    Ok((repo_root, common_git_dir))
 }
 
 fn resolve_git_dir(repo_root: &Path, git_meta: &Path) -> Result<PathBuf, String> {

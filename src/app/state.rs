@@ -43,6 +43,7 @@ pub(crate) const SIDEBAR_WIDTH_DEFAULT: f32 = 248.0;
 pub(crate) const COMMAND_PALETTE_SCROLL_ID: &str = "command-palette-scroll";
 pub(crate) const QUICK_OPEN_SCROLL_ID: &str = "quick-open-scroll";
 pub(crate) const ADD_WORKTREE_PROJECT_SCROLL_ID: &str = "add-worktree-project-scroll";
+pub(crate) const REMOVE_PROJECT_SCROLL_ID: &str = "remove-project-scroll";
 pub(crate) const DELETE_WORKTREE_PROJECT_SCROLL_ID: &str = "delete-worktree-project-scroll";
 pub(crate) const DELETE_WORKTREE_SCROLL_ID: &str = "delete-worktree-scroll";
 pub(crate) const MAX_PINNED_TERMINALS: usize = 9;
@@ -139,6 +140,13 @@ pub(crate) struct DeleteWorktreeProjectEntry {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct RemoveProjectEntry {
+    pub(crate) project_id: String,
+    pub(crate) project_name: String,
+    pub(crate) worktree_count: usize,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct DeleteWorktreeEntry {
     pub(crate) project_id: String,
     pub(crate) project_name: String,
@@ -166,6 +174,12 @@ pub(crate) struct ProjectRescanSummary {
     pub(crate) successful_projects: usize,
     pub(crate) changed_projects: usize,
     pub(crate) failed_projects: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AddProjectOutcome {
+    Added { path: String },
+    AlreadyExists { project_name: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,6 +225,7 @@ pub(crate) enum CommandPaletteAction {
     AddProject,
     AddWorktreeToProject,
     AddWorktreeToActiveProject,
+    RemoveProject,
     DeleteWorktreeFromProject,
     RescanAllProjects,
     RescanActiveProject,
@@ -274,6 +289,8 @@ pub(crate) struct App {
     pub(crate) quick_open_ignore_next_query_change: bool,
     pub(crate) add_worktree_project_picker_open: bool,
     pub(crate) add_worktree_project_selected_index: usize,
+    pub(crate) remove_project_picker_open: bool,
+    pub(crate) remove_project_selected_index: usize,
     pub(crate) delete_worktree_project_picker_open: bool,
     pub(crate) delete_worktree_project_selected_index: usize,
     pub(crate) delete_worktree_picker: Option<DeleteWorktreePicker>,
@@ -373,6 +390,10 @@ pub(crate) enum Message {
     AddWorktreeProjectSubmit,
     AddWorktreeProjectSelect(usize),
     AddWorktreeProjectCancel,
+    OpenRemoveProjectPicker,
+    RemoveProjectSubmit,
+    RemoveProjectSelect(usize),
+    RemoveProjectCancel,
     OpenDeleteWorktreeProjectPicker,
     DeleteWorktreeProjectSubmit,
     DeleteWorktreeProjectSelect(usize),
@@ -453,6 +474,8 @@ impl App {
             quick_open_ignore_next_query_change: false,
             add_worktree_project_picker_open: false,
             add_worktree_project_selected_index: 0,
+            remove_project_picker_open: false,
+            remove_project_selected_index: 0,
             delete_worktree_project_picker_open: false,
             delete_worktree_project_selected_index: 0,
             delete_worktree_picker: None,
@@ -1174,6 +1197,18 @@ impl App {
             .collect()
     }
 
+    pub(crate) fn remove_project_entries(&self) -> Vec<RemoveProjectEntry> {
+        self.persisted
+            .projects
+            .iter()
+            .map(|project| RemoveProjectEntry {
+                project_id: project.id.clone(),
+                project_name: project.name.clone(),
+                worktree_count: project.worktrees.len(),
+            })
+            .collect()
+    }
+
     pub(crate) fn delete_worktree_entries(&self, project_id: &str) -> Vec<DeleteWorktreeEntry> {
         let Some(project) = self
             .persisted
@@ -1319,6 +1354,12 @@ impl App {
                 "Add Worktree",
                 "Choose a project, then create a new worktree",
                 "worktree branch create project add",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::RemoveProject,
+                "Remove Project",
+                "Choose a project, then remove it from the sidebar",
+                "project remove sidebar delete repository repo",
             ),
             command_palette_entry(
                 CommandPaletteAction::DeleteWorktreeFromProject,
@@ -1699,6 +1740,7 @@ impl App {
         self.command_palette_open
             || self.quick_open_open
             || self.add_worktree_project_picker_open
+            || self.remove_project_picker_open
             || self.delete_worktree_project_picker_open
             || self.delete_worktree_picker.is_some()
             || self.preferences_open

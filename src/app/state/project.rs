@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::git_branch::resolve_branch;
+use crate::app::git_worktrees::{normalize_git_folder_path, resolve_project_identity};
 
 impl App {
     fn rescan_project_internal(&mut self, project_id: &str) -> Result<bool, String> {
@@ -94,14 +95,44 @@ impl App {
         Ok(self.persisted.projects[project_idx] != project_before)
     }
 
-    pub(crate) fn add_project_from_git_folder(&mut self, git_folder: &str) -> Result<(), String> {
-        let scanned = scan_worktrees(git_folder)?;
+    pub(crate) fn add_project_from_git_folder(
+        &mut self,
+        git_folder: &str,
+    ) -> Result<AddProjectOutcome, String> {
+        let normalized_git_folder = normalize_git_folder_path(git_folder)?;
+        let project_identity = resolve_project_identity(&normalized_git_folder)?;
+
+        if let Some((existing_project_id, existing_project_name)) =
+            self.persisted.projects.iter().find_map(|project| {
+                let Some(existing_git_folder) = project.git_folder_path.as_deref() else {
+                    return None;
+                };
+
+                let matches_existing = resolve_project_identity(existing_git_folder)
+                    .map(|existing_identity| existing_identity == project_identity)
+                    .unwrap_or_else(|_| {
+                        normalize_git_folder_path(existing_git_folder)
+                            .map(|existing_path| existing_path == normalized_git_folder)
+                            .unwrap_or(existing_git_folder == normalized_git_folder)
+                    });
+
+                matches_existing.then(|| (project.id.clone(), project.name.clone()))
+            })
+        {
+            self.persisted.active_project_id = Some(existing_project_id);
+            self.normalize_selection();
+            return Ok(AddProjectOutcome::AlreadyExists {
+                project_name: existing_project_name,
+            });
+        }
+
+        let scanned = scan_worktrees(&normalized_git_folder)?;
 
         let project_id = create_id("project");
         let mut project = ProjectRecord {
             id: project_id.clone(),
-            name: infer_project_name(git_folder),
-            git_folder_path: Some(git_folder.to_string()),
+            name: infer_project_name(&normalized_git_folder),
+            git_folder_path: Some(normalized_git_folder.clone()),
             worktrees: scanned
                 .into_iter()
                 .map(|worktree| WorktreeRecord {
@@ -128,7 +159,9 @@ impl App {
         self.resolve_and_update_worktree_branches(&project_id);
 
         self.normalize_selection();
-        Ok(())
+        Ok(AddProjectOutcome::Added {
+            path: normalized_git_folder,
+        })
     }
 
     fn resolve_and_update_worktree_branches(&mut self, project_id: &str) {
