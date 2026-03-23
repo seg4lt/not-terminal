@@ -207,7 +207,25 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.save_task()
         }
         Message::FilterChanged(value) => {
+            if app.filter_query != value {
+                app.cancel_sidebar_drag();
+            }
             app.filter_query = value;
+            Task::none()
+        }
+        Message::StartSidebarDrag(item) => match app.start_sidebar_drag(item) {
+            Ok(()) => Task::none(),
+            Err(error) => {
+                app.status = error;
+                Task::none()
+            }
+        },
+        Message::SidebarDragHover(target) => {
+            app.set_sidebar_drag_hover(target);
+            Task::none()
+        }
+        Message::SidebarDragHoverExit(target) => {
+            app.clear_sidebar_drag_hover(&target);
             Task::none()
         }
         Message::AddProject => {
@@ -1362,6 +1380,32 @@ fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) 
             update(app, Message::StartAddWorktree(project_id))
         }
         CommandPaletteAction::RemoveProject => update(app, Message::OpenRemoveProjectPicker),
+        CommandPaletteAction::ExpandAllProjects => {
+            if app.persisted.projects.is_empty() {
+                app.status = String::from("No projects to expand");
+                return Task::none();
+            }
+            if app.all_project_trees_expanded() {
+                app.status = String::from("All projects are already expanded");
+                return Task::none();
+            }
+            app.expand_all_project_trees();
+            app.status = String::from("Expanded all projects");
+            app.save_task()
+        }
+        CommandPaletteAction::CollapseAllProjects => {
+            if app.persisted.projects.is_empty() {
+                app.status = String::from("No projects to collapse");
+                return Task::none();
+            }
+            if app.all_project_trees_collapsed() {
+                app.status = String::from("All projects are already collapsed");
+                return Task::none();
+            }
+            app.collapse_all_project_trees();
+            app.status = String::from("Collapsed all projects");
+            app.save_task()
+        }
         CommandPaletteAction::DeleteWorktreeFromProject => {
             update(app, Message::OpenDeleteWorktreeProjectPicker)
         }

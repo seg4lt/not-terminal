@@ -146,6 +146,34 @@ pub(super) fn handle_mouse(app: &mut App, event: mouse::Event) -> Task<Message> 
         return Task::none();
     }
 
+    if app.sidebar_drag.is_some() {
+        match event {
+            mouse::Event::CursorMoved { position } => {
+                app.cursor_position_logical = Some(position);
+                return Task::none();
+            }
+            mouse::Event::CursorLeft => {
+                app.cursor_position_logical = None;
+                app.cancel_sidebar_drag();
+                return Task::none();
+            }
+            mouse::Event::ButtonReleased(mouse::Button::Left) => {
+                if let Some(status) = app.finish_sidebar_drag() {
+                    app.status = String::from(status);
+                    return app.save_task();
+                }
+
+                return Task::none();
+            }
+            mouse::Event::ButtonPressed(_)
+            | mouse::Event::ButtonReleased(_)
+            | mouse::Event::WheelScrolled { .. }
+            | mouse::Event::CursorEntered => {
+                return Task::none();
+            }
+        }
+    }
+
     let modifiers = app.keyboard_modifiers;
     let mut should_refresh_branch = false;
     match event {

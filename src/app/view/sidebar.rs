@@ -1,9 +1,16 @@
 use super::*;
-use crate::app::state::{App, Message, TerminalStatus};
+use crate::app::state::{App, Message, SidebarDragItem, TerminalStatus};
 use iced::mouse::Interaction;
 use iced::widget::text::Wrapping;
 use iced::widget::{button, container, mouse_area, row, scrollable, text};
-use iced::{Alignment, Background, Border, Color, Element, Length};
+use iced::{Alignment, Background, Border, Color, Element, Length, Point};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DragDropIndicator {
+    None,
+    Before,
+    After,
+}
 
 fn terminal_working_frame(app: &App) -> &'static str {
     const FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
@@ -160,6 +167,205 @@ fn missing_chip() -> Element<'static, Message> {
             ..Default::default()
         })
         .into()
+}
+
+fn drag_handle(item: SidebarDragItem, enabled: bool, dragging: bool) -> Element<'static, Message> {
+    let icon = container(text("⋮⋮").size(10).color(if dragging {
+        rgb(226, 232, 240)
+    } else if enabled {
+        rgb(128, 135, 146)
+    } else {
+        rgb(82, 88, 98)
+    }))
+    .width(Length::Fixed(14.0))
+    .center_y(Length::Shrink);
+
+    if !enabled {
+        return icon.into();
+    }
+
+    mouse_area(icon)
+        .on_press(Message::StartSidebarDrag(item))
+        .interaction(if dragging {
+            Interaction::Grabbing
+        } else {
+            Interaction::Grab
+        })
+        .into()
+}
+
+fn with_drag_hover<'a>(
+    content: Element<'a, Message>,
+    target: SidebarDragItem,
+    enabled: bool,
+) -> Element<'a, Message> {
+    if !enabled {
+        return content;
+    }
+
+    let move_target = target.clone();
+    mouse_area(content)
+        .on_enter(Message::SidebarDragHover(target.clone()))
+        .on_move(move |_point: Point| Message::SidebarDragHover(move_target.clone()))
+        .on_exit(Message::SidebarDragHoverExit(target))
+        .into()
+}
+
+fn drop_indicator_bar() -> Element<'static, Message> {
+    container("")
+        .width(Length::Fill)
+        .height(Length::Fixed(2.0))
+        .style(|_| ContainerStyle {
+            background: Some(Background::Color(rgb(92, 176, 255))),
+            ..Default::default()
+        })
+        .into()
+}
+
+fn decorate_drag_target<'a>(
+    content: Element<'a, Message>,
+    indicator: DragDropIndicator,
+) -> Element<'a, Message> {
+    match indicator {
+        DragDropIndicator::None => content,
+        DragDropIndicator::Before => iced::widget::column![drop_indicator_bar(), content]
+            .spacing(0)
+            .into(),
+        DragDropIndicator::After => iced::widget::column![content, drop_indicator_bar()]
+            .spacing(0)
+            .into(),
+    }
+}
+
+fn row_drag_indicator(app: &App, target: &SidebarDragItem) -> DragDropIndicator {
+    let Some(drag) = app.sidebar_drag.as_ref() else {
+        return DragDropIndicator::None;
+    };
+    let Some(hover) = drag.hover.as_ref() else {
+        return DragDropIndicator::None;
+    };
+    if hover != target {
+        return DragDropIndicator::None;
+    }
+
+    let indicator = match (&drag.item, hover) {
+        (
+            SidebarDragItem::Project {
+                project_id: dragged_project_id,
+            },
+            SidebarDragItem::Project {
+                project_id: target_project_id,
+            },
+        ) => {
+            let Some(dragged_index) = app
+                .persisted
+                .projects
+                .iter()
+                .position(|project| &project.id == dragged_project_id)
+            else {
+                return DragDropIndicator::None;
+            };
+            let Some(target_index) = app
+                .persisted
+                .projects
+                .iter()
+                .position(|project| &project.id == target_project_id)
+            else {
+                return DragDropIndicator::None;
+            };
+            indicator_from_indices(dragged_index, target_index)
+        }
+        (
+            SidebarDragItem::Worktree {
+                project_id,
+                worktree_id: dragged_worktree_id,
+            },
+            SidebarDragItem::Worktree {
+                project_id: target_project_id,
+                worktree_id: target_worktree_id,
+            },
+        ) if project_id == target_project_id => {
+            let Some(project) = app
+                .persisted
+                .projects
+                .iter()
+                .find(|project| &project.id == project_id)
+            else {
+                return DragDropIndicator::None;
+            };
+            let Some(dragged_index) = project
+                .worktrees
+                .iter()
+                .position(|worktree| &worktree.id == dragged_worktree_id)
+            else {
+                return DragDropIndicator::None;
+            };
+            let Some(target_index) = project
+                .worktrees
+                .iter()
+                .position(|worktree| &worktree.id == target_worktree_id)
+            else {
+                return DragDropIndicator::None;
+            };
+            indicator_from_indices(dragged_index, target_index)
+        }
+        (
+            SidebarDragItem::Terminal {
+                project_id,
+                worktree_id,
+                terminal_id: dragged_terminal_id,
+            },
+            SidebarDragItem::Terminal {
+                project_id: target_project_id,
+                worktree_id: target_worktree_id,
+                terminal_id: target_terminal_id,
+            },
+        ) if project_id == target_project_id && worktree_id == target_worktree_id => {
+            let Some(project) = app
+                .persisted
+                .projects
+                .iter()
+                .find(|project| &project.id == project_id)
+            else {
+                return DragDropIndicator::None;
+            };
+            let Some(worktree) = project
+                .worktrees
+                .iter()
+                .find(|worktree| &worktree.id == worktree_id)
+            else {
+                return DragDropIndicator::None;
+            };
+            let Some(dragged_index) = worktree
+                .terminals
+                .iter()
+                .position(|terminal| &terminal.id == dragged_terminal_id)
+            else {
+                return DragDropIndicator::None;
+            };
+            let Some(target_index) = worktree
+                .terminals
+                .iter()
+                .position(|terminal| &terminal.id == target_terminal_id)
+            else {
+                return DragDropIndicator::None;
+            };
+            indicator_from_indices(dragged_index, target_index)
+        }
+        _ => DragDropIndicator::None,
+    };
+
+    indicator
+}
+
+fn indicator_from_indices(dragged_index: usize, target_index: usize) -> DragDropIndicator {
+    if dragged_index < target_index {
+        DragDropIndicator::After
+    } else if dragged_index > target_index {
+        DragDropIndicator::Before
+    } else {
+        DragDropIndicator::None
+    }
 }
 
 pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
@@ -504,6 +710,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
     let projects_active = app.persisted.active_project_id.is_some();
     let all_project_trees_expanded = app.all_project_trees_expanded();
     let filter_query = app.normalized_filter_query();
+    let drag_handles_enabled = filter_query.is_none();
     let mut projects_column = iced::widget::column![
         container(
             row![
@@ -558,6 +765,14 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
     for project_idx in project_indices {
         let project = &app.persisted.projects[project_idx];
         let project_id = project.id.clone();
+        let project_drag_item = SidebarDragItem::Project {
+            project_id: project_id.clone(),
+        };
+        let project_dragging = app
+            .sidebar_drag
+            .as_ref()
+            .is_some_and(|drag| drag.item == project_drag_item);
+        let project_indicator = row_drag_indicator(app, &project_drag_item);
         let project_active = app
             .persisted
             .active_project_id
@@ -570,6 +785,11 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
         let worktree_total = project.worktrees.len();
 
         let project_header = row![
+            drag_handle(
+                project_drag_item.clone(),
+                drag_handles_enabled,
+                project_dragging
+            ),
             button(text(if project_collapsed { "›" } else { "⌄" }).size(16))
                 .padding([0, 2])
                 .style(|_, status| chevron_button_style(status))
@@ -602,12 +822,19 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
         .spacing(5)
         .align_y(Alignment::Center);
 
-        let mut project_card = iced::widget::column![
-            container(project_header)
-                .padding([4, 8])
-                .style(move |_| project_header_style(project_active))
-        ]
-        .spacing(0);
+        let project_header = with_drag_hover(
+            decorate_drag_target(
+                container(project_header)
+                    .padding([4, 8])
+                    .style(move |_| project_header_style(project_active))
+                    .into(),
+                project_indicator,
+            ),
+            project_drag_item,
+            drag_handles_enabled,
+        );
+
+        let mut project_card = iced::widget::column![project_header].spacing(0);
 
         if !project_collapsed {
             let mut worktree_list = iced::widget::column![].spacing(3);
@@ -621,6 +848,15 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
             } else {
                 for worktree in &project.worktrees {
                     let worktree_id = worktree.id.clone();
+                    let worktree_drag_item = SidebarDragItem::Worktree {
+                        project_id: project_id.clone(),
+                        worktree_id: worktree_id.clone(),
+                    };
+                    let worktree_dragging = app
+                        .sidebar_drag
+                        .as_ref()
+                        .is_some_and(|drag| drag.item == worktree_drag_item);
+                    let worktree_indicator = row_drag_indicator(app, &worktree_drag_item);
                     let worktree_collapsed = filter_query
                         .as_deref()
                         .is_none_or(|query| !App::worktree_matches_filter(worktree, query))
@@ -654,7 +890,12 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                         .push(text(&worktree.name).size(13).wrapping(Wrapping::None));
 
                     let worktree_row = row![
-                        container("").width(Length::Fixed(8.0)),
+                        container("").width(Length::Fixed(4.0)),
+                        drag_handle(
+                            worktree_drag_item.clone(),
+                            drag_handles_enabled,
+                            worktree_dragging
+                        ),
                         button(text(if worktree_collapsed { "›" } else { "⌄" }).size(16))
                             .padding([0, 2])
                             .style(|_, status| chevron_button_style(status))
@@ -691,17 +932,33 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                     .spacing(5)
                     .align_y(Alignment::Center);
 
-                    worktree_list = worktree_list.push(
-                        container(worktree_row)
-                            .padding([2, 6])
-                            .style(move |_| worktree_row_style(worktree_selected)),
-                    );
+                    worktree_list = worktree_list.push(with_drag_hover(
+                        decorate_drag_target(
+                            container(worktree_row)
+                                .padding([2, 6])
+                                .style(move |_| worktree_row_style(worktree_selected))
+                                .into(),
+                            worktree_indicator,
+                        ),
+                        worktree_drag_item,
+                        drag_handles_enabled,
+                    ));
 
                     if !worktree_collapsed {
                         let mut terminals_column = iced::widget::column![].spacing(3);
 
                         for terminal in &worktree.terminals {
                             let terminal_id = terminal.id.clone();
+                            let terminal_drag_item = SidebarDragItem::Terminal {
+                                project_id: project_id.clone(),
+                                worktree_id: worktree_id.clone(),
+                                terminal_id: terminal_id.clone(),
+                            };
+                            let terminal_dragging = app
+                                .sidebar_drag
+                                .as_ref()
+                                .is_some_and(|drag| drag.item == terminal_drag_item);
+                            let terminal_indicator = row_drag_indicator(app, &terminal_drag_item);
                             let terminal_id_for_action = terminal_id.clone();
                             let terminal_id_for_pin = terminal_id.clone();
                             let terminal_active = active_terminal_id
@@ -715,106 +972,123 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                             let border_color =
                                 terminal_status_border_color(app, &terminal_id, terminal_active);
 
-                            terminals_column = terminals_column.push(
-                                container(
-                                    row![
-                                        container("").width(Length::Fixed(26.0)),
-                                        container("")
-                                            .width(Length::Fixed(2.0))
-                                            .height(Length::Fill)
-                                            .style(move |_| ContainerStyle {
-                                                background: Some(Background::Color(border_color)),
-                                                ..Default::default()
-                                            }),
-                                        container(text(status_symbol).size(7).color(status_color))
+                            terminals_column = terminals_column.push(with_drag_hover(
+                                decorate_drag_target(
+                                    container(
+                                        row![
+                                            container("").width(Length::Fixed(14.0)),
+                                            drag_handle(
+                                                terminal_drag_item.clone(),
+                                                drag_handles_enabled,
+                                                terminal_dragging
+                                            ),
+                                            container("")
+                                                .width(Length::Fixed(2.0))
+                                                .height(Length::Fill)
+                                                .style(move |_| ContainerStyle {
+                                                    background: Some(Background::Color(
+                                                        border_color
+                                                    )),
+                                                    ..Default::default()
+                                                }),
+                                            container(
+                                                text(status_symbol).size(7).color(status_color)
+                                            )
                                             .padding([0, 4])
                                             .width(Length::Fixed(16.0)),
-                                        {
-                                            let name_element = text(&terminal.name)
-                                                .size(12)
-                                                .wrapping(Wrapping::None);
-                                            let mut name_with_badge = row![
-                                                container(name_element)
-                                                    .width(Length::Fill)
-                                                    .clip(true)
-                                            ]
-                                            .spacing(4)
-                                            .width(Length::Fill);
-
-                                            if terminal_has_splits {
-                                                name_with_badge = name_with_badge.push(
-                                                    container(
-                                                        text("◫").size(9).color(rgb(176, 188, 212)),
-                                                    )
-                                                    .padding([1, 4])
-                                                    .style(|_| subtle_badge_style()),
-                                                );
-                                            }
-
-                                            if let Some(working_badge) =
-                                                terminal_working_badge(app, &terminal_id)
                                             {
-                                                name_with_badge =
-                                                    name_with_badge.push(working_badge);
-                                            }
+                                                let name_element = text(&terminal.name)
+                                                    .size(12)
+                                                    .wrapping(Wrapping::None);
+                                                let mut name_with_badge = row![
+                                                    container(name_element)
+                                                        .width(Length::Fill)
+                                                        .clip(true)
+                                                ]
+                                                .spacing(4)
+                                                .width(Length::Fill);
 
-                                            if let TerminalStatus::Error(code) =
-                                                app.get_terminal_status(&terminal_id)
-                                            {
-                                                name_with_badge = name_with_badge.push(
-                                                    container(
-                                                        text(format!("{}", code))
-                                                            .size(9)
-                                                            .color(rgb(220, 80, 80)),
-                                                    )
-                                                    .padding([1, 4])
-                                                    .style(|_| ContainerStyle {
-                                                        background: Some(Background::Color(rgb(
-                                                            40, 30, 32,
-                                                        ))),
-                                                        border: Border {
-                                                            width: 1.0,
-                                                            color: rgb(70, 50, 54),
-                                                            radius: 8.0.into(),
-                                                        },
-                                                        ..Default::default()
-                                                    }),
-                                                );
-                                            }
+                                                if terminal_has_splits {
+                                                    name_with_badge = name_with_badge.push(
+                                                        container(
+                                                            text("◫")
+                                                                .size(9)
+                                                                .color(rgb(176, 188, 212)),
+                                                        )
+                                                        .padding([1, 4])
+                                                        .style(|_| subtle_badge_style()),
+                                                    );
+                                                }
 
-                                            button(
-                                                container(name_with_badge)
-                                                    .width(Length::Fill)
-                                                    .clip(true),
-                                            )
-                                            .padding([2, 4])
-                                            .style(move |_, status| {
-                                                terminal_button_style(status, terminal_active)
-                                            })
-                                            .width(Length::Fill)
-                                            .on_press(
-                                                Message::SelectTerminal {
+                                                if let Some(working_badge) =
+                                                    terminal_working_badge(app, &terminal_id)
+                                                {
+                                                    name_with_badge =
+                                                        name_with_badge.push(working_badge);
+                                                }
+
+                                                if let TerminalStatus::Error(code) =
+                                                    app.get_terminal_status(&terminal_id)
+                                                {
+                                                    name_with_badge = name_with_badge.push(
+                                                        container(
+                                                            text(format!("{}", code))
+                                                                .size(9)
+                                                                .color(rgb(220, 80, 80)),
+                                                        )
+                                                        .padding([1, 4])
+                                                        .style(|_| ContainerStyle {
+                                                            background: Some(Background::Color(
+                                                                rgb(40, 30, 32),
+                                                            )),
+                                                            border: Border {
+                                                                width: 1.0,
+                                                                color: rgb(70, 50, 54),
+                                                                radius: 8.0.into(),
+                                                            },
+                                                            ..Default::default()
+                                                        }),
+                                                    );
+                                                }
+
+                                                button(
+                                                    container(name_with_badge)
+                                                        .width(Length::Fill)
+                                                        .clip(true),
+                                                )
+                                                .padding([2, 4])
+                                                .style(move |_, status| {
+                                                    terminal_button_style(status, terminal_active)
+                                                })
+                                                .width(Length::Fill)
+                                                .on_press(Message::SelectTerminal {
                                                     project_id: project_id.clone(),
                                                     terminal_id: terminal_id.clone(),
-                                                },
-                                            )
-                                        },
-                                        pin_toggle_button(terminal_id_for_pin, terminal_pinned),
-                                        button(text("×").size(12))
-                                            .padding([0, 5])
-                                            .style(|_, status| subtle_delete_button_style(status))
-                                            .on_press(Message::RemoveTerminal {
-                                                project_id: project_id.clone(),
-                                                worktree_id: worktree_id.clone(),
-                                                terminal_id: terminal_id_for_action,
-                                            }),
-                                    ]
-                                    .spacing(4)
-                                    .align_y(Alignment::Center),
-                                )
-                                .padding([2, 6])
-                                .style(move |_| terminal_row_style(terminal_active)),
-                            );
+                                                })
+                                            },
+                                            pin_toggle_button(terminal_id_for_pin, terminal_pinned),
+                                            button(text("×").size(12))
+                                                .padding([0, 5])
+                                                .style(|_, status| {
+                                                    subtle_delete_button_style(status)
+                                                })
+                                                .on_press(Message::RemoveTerminal {
+                                                    project_id: project_id.clone(),
+                                                    worktree_id: worktree_id.clone(),
+                                                    terminal_id: terminal_id_for_action,
+                                                }),
+                                        ]
+                                        .spacing(4)
+                                        .align_y(Alignment::Center),
+                                    )
+                                    .padding([2, 6])
+                                    .style(move |_| terminal_row_style(terminal_active))
+                                    .into(),
+                                    terminal_indicator,
+                                ),
+                                terminal_drag_item,
+                                drag_handles_enabled,
+                            ));
                         }
 
                         worktree_list = worktree_list.push(

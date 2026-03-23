@@ -209,6 +209,28 @@ pub(crate) struct QuickOpenEntry {
     pub(crate) kind: QuickOpenEntryKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SidebarDragItem {
+    Project {
+        project_id: String,
+    },
+    Worktree {
+        project_id: String,
+        worktree_id: String,
+    },
+    Terminal {
+        project_id: String,
+        worktree_id: String,
+        terminal_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SidebarDragState {
+    pub(crate) item: SidebarDragItem,
+    pub(crate) hover: Option<SidebarDragItem>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum CommandPaletteAction {
     OpenQuickOpen,
@@ -226,6 +248,8 @@ pub(crate) enum CommandPaletteAction {
     AddWorktreeToProject,
     AddWorktreeToActiveProject,
     RemoveProject,
+    ExpandAllProjects,
+    CollapseAllProjects,
     DeleteWorktreeFromProject,
     RescanAllProjects,
     RescanActiveProject,
@@ -287,6 +311,7 @@ pub(crate) struct App {
     pub(crate) quick_open_query: String,
     pub(crate) quick_open_selected_index: usize,
     pub(crate) quick_open_ignore_next_query_change: bool,
+    pub(crate) sidebar_drag: Option<SidebarDragState>,
     pub(crate) add_worktree_project_picker_open: bool,
     pub(crate) add_worktree_project_selected_index: usize,
     pub(crate) remove_project_picker_open: bool,
@@ -377,6 +402,9 @@ pub(crate) enum Message {
     QuickOpenSubmit,
     QuickOpenSelect(usize),
     QuickOpenCloseTerminal(String),
+    StartSidebarDrag(SidebarDragItem),
+    SidebarDragHover(SidebarDragItem),
+    SidebarDragHoverExit(SidebarDragItem),
     StartRenameWorktree {
         project_id: String,
         worktree_id: String,
@@ -472,6 +500,7 @@ impl App {
             quick_open_query: String::new(),
             quick_open_selected_index: 0,
             quick_open_ignore_next_query_change: false,
+            sidebar_drag: None,
             add_worktree_project_picker_open: false,
             add_worktree_project_selected_index: 0,
             remove_project_picker_open: false,
@@ -1362,6 +1391,18 @@ impl App {
                 "project remove sidebar delete repository repo",
             ),
             command_palette_entry(
+                CommandPaletteAction::ExpandAllProjects,
+                "Expand All Projects",
+                "Expand every project and worktree in the sidebar",
+                "expand all projects worktrees sidebar tree unfold open",
+            ),
+            command_palette_entry(
+                CommandPaletteAction::CollapseAllProjects,
+                "Collapse All Projects",
+                "Collapse every project and worktree in the sidebar",
+                "collapse all projects worktrees sidebar tree fold close",
+            ),
+            command_palette_entry(
                 CommandPaletteAction::DeleteWorktreeFromProject,
                 "Delete Worktree",
                 "Choose a project, then remove one of its worktrees",
@@ -1510,6 +1551,95 @@ impl App {
             .collapsed_worktrees
             .iter()
             .any(|id| id == worktree_id)
+    }
+
+    pub(crate) fn start_sidebar_drag(&mut self, item: SidebarDragItem) -> Result<(), String> {
+        if self.normalized_filter_query().is_some() {
+            return Err(String::from(
+                "Clear the filter before reordering the sidebar",
+            ));
+        }
+
+        self.worktree_context_menu = None;
+        self.project_context_menu = None;
+        self.sidebar_drag = Some(SidebarDragState { item, hover: None });
+        Ok(())
+    }
+
+    pub(crate) fn set_sidebar_drag_hover(&mut self, target: SidebarDragItem) {
+        let Some(drag) = self.sidebar_drag.as_mut() else {
+            return;
+        };
+
+        if !sidebar_drag_target_allowed(&drag.item, &target) || drag.item == target {
+            drag.hover = None;
+            return;
+        }
+
+        drag.hover = Some(target);
+    }
+
+    pub(crate) fn clear_sidebar_drag_hover(&mut self, target: &SidebarDragItem) {
+        let Some(drag) = self.sidebar_drag.as_mut() else {
+            return;
+        };
+
+        if drag.hover.as_ref() == Some(target) {
+            drag.hover = None;
+        }
+    }
+
+    pub(crate) fn cancel_sidebar_drag(&mut self) {
+        self.sidebar_drag = None;
+    }
+
+    pub(crate) fn finish_sidebar_drag(&mut self) -> Option<&'static str> {
+        let drag = self.sidebar_drag.take()?;
+        let target = drag.hover?;
+
+        if drag.item == target {
+            return None;
+        }
+
+        let changed = match (drag.item, target) {
+            (
+                SidebarDragItem::Project {
+                    project_id: dragged_id,
+                },
+                SidebarDragItem::Project {
+                    project_id: target_id,
+                },
+            ) => self.reorder_project(&dragged_id, &target_id),
+            (
+                SidebarDragItem::Worktree {
+                    project_id,
+                    worktree_id: dragged_id,
+                },
+                SidebarDragItem::Worktree {
+                    project_id: target_project_id,
+                    worktree_id: target_id,
+                },
+            ) if project_id == target_project_id => {
+                self.reorder_worktree(&project_id, &dragged_id, &target_id)
+            }
+            (
+                SidebarDragItem::Terminal {
+                    project_id,
+                    worktree_id,
+                    terminal_id: dragged_id,
+                },
+                SidebarDragItem::Terminal {
+                    project_id: target_project_id,
+                    worktree_id: target_worktree_id,
+                    terminal_id: target_id,
+                },
+            ) if project_id == target_project_id && worktree_id == target_worktree_id => {
+                self.reorder_terminal(&project_id, &worktree_id, &dragged_id, &target_id)
+            }
+            _ => false,
+        };
+
+        changed.then_some("Sidebar order updated")
     }
 
     pub(crate) fn ensure_runtime_for_terminal(&mut self, terminal_id: &str) -> Result<(), String> {
@@ -2030,6 +2160,56 @@ fn toggle_in_list(values: &mut Vec<String>, target: &str) {
     } else {
         values.push(target.to_string());
     }
+}
+
+fn sidebar_drag_target_allowed(item: &SidebarDragItem, target: &SidebarDragItem) -> bool {
+    match (item, target) {
+        (SidebarDragItem::Project { .. }, SidebarDragItem::Project { .. }) => true,
+        (
+            SidebarDragItem::Worktree {
+                project_id: item_project_id,
+                ..
+            },
+            SidebarDragItem::Worktree {
+                project_id: target_project_id,
+                ..
+            },
+        ) => item_project_id == target_project_id,
+        (
+            SidebarDragItem::Terminal {
+                project_id: item_project_id,
+                worktree_id: item_worktree_id,
+                ..
+            },
+            SidebarDragItem::Terminal {
+                project_id: target_project_id,
+                worktree_id: target_worktree_id,
+                ..
+            },
+        ) => item_project_id == target_project_id && item_worktree_id == target_worktree_id,
+        _ => false,
+    }
+}
+
+fn move_vec_item_by<T>(
+    values: &mut Vec<T>,
+    is_dragged: impl Fn(&T) -> bool,
+    is_target: impl Fn(&T) -> bool,
+) -> bool {
+    let Some(from_index) = values.iter().position(is_dragged) else {
+        return false;
+    };
+    let Some(target_index) = values.iter().position(is_target) else {
+        return false;
+    };
+
+    if from_index == target_index {
+        return false;
+    }
+
+    let item = values.remove(from_index);
+    values.insert(target_index, item);
+    true
 }
 
 fn suggest_worktree_destination(git_folder: &str, branch_name: &str) -> String {

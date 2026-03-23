@@ -338,6 +338,18 @@ impl App {
         }
     }
 
+    pub(crate) fn reorder_project(
+        &mut self,
+        dragged_project_id: &str,
+        target_project_id: &str,
+    ) -> bool {
+        move_vec_item_by(
+            &mut self.persisted.projects,
+            |project| project.id == dragged_project_id,
+            |project| project.id == target_project_id,
+        )
+    }
+
     pub(crate) fn all_project_trees_expanded(&self) -> bool {
         let mut has_any_projects = false;
 
@@ -363,21 +375,56 @@ impl App {
         has_any_projects
     }
 
+    pub(crate) fn all_project_trees_collapsed(&self) -> bool {
+        let mut has_any_projects = false;
+
+        for project in &self.persisted.projects {
+            has_any_projects = true;
+
+            if !crate::app::state::App::project_collapsed(project) {
+                return false;
+            }
+
+            for worktree in &project.worktrees {
+                if !project
+                    .tree_state
+                    .collapsed_worktrees
+                    .iter()
+                    .any(|id| id == &worktree.id)
+                {
+                    return false;
+                }
+            }
+        }
+
+        has_any_projects
+    }
+
+    pub(crate) fn collapse_all_project_trees(&mut self) {
+        for project in &mut self.persisted.projects {
+            project.tree_state.collapsed_projects = vec![project.id.clone()];
+            project.tree_state.collapsed_worktrees = project
+                .worktrees
+                .iter()
+                .map(|worktree| worktree.id.clone())
+                .collect();
+        }
+    }
+
+    pub(crate) fn expand_all_project_trees(&mut self) {
+        for project in &mut self.persisted.projects {
+            project.tree_state.collapsed_worktrees.clear();
+            project.tree_state.collapsed_projects.clear();
+        }
+    }
+
     pub(crate) fn toggle_all_project_trees_collapsed(&mut self) {
         let collapse_all = self.all_project_trees_expanded();
 
-        for project in &mut self.persisted.projects {
-            if collapse_all {
-                project.tree_state.collapsed_projects = vec![project.id.clone()];
-                project.tree_state.collapsed_worktrees = project
-                    .worktrees
-                    .iter()
-                    .map(|worktree| worktree.id.clone())
-                    .collect();
-            } else {
-                project.tree_state.collapsed_worktrees.clear();
-                project.tree_state.collapsed_projects.clear();
-            }
+        if collapse_all {
+            self.collapse_all_project_trees();
+        } else {
+            self.expand_all_project_trees();
         }
     }
 
@@ -390,6 +437,59 @@ impl App {
         {
             toggle_in_list(&mut project.tree_state.collapsed_worktrees, worktree_id);
         }
+    }
+
+    pub(crate) fn reorder_worktree(
+        &mut self,
+        project_id: &str,
+        dragged_worktree_id: &str,
+        target_worktree_id: &str,
+    ) -> bool {
+        let Some(project) = self
+            .persisted
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+        else {
+            return false;
+        };
+
+        move_vec_item_by(
+            &mut project.worktrees,
+            |worktree| worktree.id == dragged_worktree_id,
+            |worktree| worktree.id == target_worktree_id,
+        )
+    }
+
+    pub(crate) fn reorder_terminal(
+        &mut self,
+        project_id: &str,
+        worktree_id: &str,
+        dragged_terminal_id: &str,
+        target_terminal_id: &str,
+    ) -> bool {
+        let Some(project) = self
+            .persisted
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+        else {
+            return false;
+        };
+
+        let Some(worktree) = project
+            .worktrees
+            .iter_mut()
+            .find(|worktree| worktree.id == worktree_id)
+        else {
+            return false;
+        };
+
+        move_vec_item_by(
+            &mut worktree.terminals,
+            |terminal| terminal.id == dragged_terminal_id,
+            |terminal| terminal.id == target_terminal_id,
+        )
     }
 
     pub(crate) fn remove_project(&mut self, project_id: &str) -> Result<(), String> {
