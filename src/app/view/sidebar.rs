@@ -368,6 +368,10 @@ fn indicator_from_indices(dragged_index: usize, target_index: usize) -> DragDrop
     }
 }
 
+fn disclosure_icon(collapsed: bool) -> &'static str {
+    if collapsed { "▸" } else { "▾" }
+}
+
 pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
     let project_indices = app.filtered_project_indices();
     let mut list = iced::widget::column![].spacing(8).width(Length::Fill);
@@ -790,7 +794,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                 drag_handles_enabled,
                 project_dragging
             ),
-            button(text(if project_collapsed { "›" } else { "⌄" }).size(16))
+            button(text(disclosure_icon(project_collapsed)).size(15))
                 .padding([0, 2])
                 .style(|_, status| chevron_button_style(status))
                 .on_press(Message::ToggleProjectCollapsed(project_id.clone())),
@@ -896,7 +900,7 @@ pub(super) fn sidebar_view(app: &App) -> Element<'_, Message> {
                             drag_handles_enabled,
                             worktree_dragging
                         ),
-                        button(text(if worktree_collapsed { "›" } else { "⌄" }).size(16))
+                        button(text(disclosure_icon(worktree_collapsed)).size(15))
                             .padding([0, 2])
                             .style(|_, status| chevron_button_style(status))
                             .on_press(Message::ToggleWorktreeCollapsed {

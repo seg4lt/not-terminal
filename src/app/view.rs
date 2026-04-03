@@ -72,7 +72,7 @@ fn top_bar_view(app: &App) -> Element<'_, Message> {
 
     if !app.sidebar_state.is_hidden() {
         let controls = row![
-            button(text("◁").size(13))
+            button(text("⟨").size(14))
                 .padding([0, 7])
                 .style(|_, status| toolbar_button_style(status))
                 .on_press(Message::ToggleSidebar),
