@@ -6,8 +6,8 @@ mod sidebar;
 
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, container, container::Style as ContainerStyle, opaque, row, stack, text, text_input,
-    text_input::Style as TextInputStyle,
+    button, container, container::Style as ContainerStyle, mouse_area, opaque, row, stack, text,
+    text_input, text_input::Style as TextInputStyle,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length};
 use modal::modal_overlay;
@@ -19,11 +19,14 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
     let main_area = if app.active_browser().is_some() {
         browser_panel_view(app)
     } else {
-        container(text(""))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_| surface_style())
-            .into()
+        mouse_area(
+            container(text(""))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_| surface_style()),
+        )
+        .interaction(app.terminal_split_resize_interaction())
+        .into()
     };
 
     let content: Element<'_, Message> = if app.sidebar_state.is_hidden() {

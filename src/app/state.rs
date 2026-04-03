@@ -5,14 +5,16 @@ use crate::app::model::{
     next_project_name, next_terminal_name,
 };
 use crate::app::persistence;
-use crate::app::runtime::{PaneRuntime, RuntimeSession};
+use crate::app::runtime::{PaneRuntime, RuntimeSession, SplitAxis, SplitDivider};
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyProgressReportState, GhosttyRuntimeAction, host_view_free, host_view_new,
     ns_view_ptr, parent_view_set_attention_badge,
 };
 use crate::webview::WebView;
 use iced::{
-    Point, Size, Subscription, Task, keyboard, time,
+    Point, Size, Subscription, Task, keyboard,
+    mouse::Interaction,
+    time,
     window::{self},
 };
 use std::collections::{HashMap, HashSet};
@@ -245,6 +247,14 @@ pub(crate) struct SidebarDragState {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct SplitResizeDragState {
+    pub(crate) terminal_id: String,
+    pub(crate) branch_path: Vec<bool>,
+    pub(crate) axis: SplitAxis,
+    pub(crate) grab_offset: f32,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum CommandPaletteAction {
     OpenQuickOpen,
     ToggleSidebar,
@@ -325,6 +335,7 @@ pub(crate) struct App {
     pub(crate) quick_open_selected_index: usize,
     pub(crate) quick_open_ignore_next_query_change: bool,
     pub(crate) sidebar_drag: Option<SidebarDragState>,
+    pub(crate) split_resize_drag: Option<SplitResizeDragState>,
     pub(crate) add_worktree_project_picker_open: bool,
     pub(crate) add_worktree_project_selected_index: usize,
     pub(crate) remove_project_picker_open: bool,
@@ -519,6 +530,7 @@ impl App {
             quick_open_selected_index: 0,
             quick_open_ignore_next_query_change: false,
             sidebar_drag: None,
+            split_resize_drag: None,
             add_worktree_project_picker_open: false,
             add_worktree_project_selected_index: 0,
             remove_project_picker_open: false,
@@ -728,6 +740,119 @@ impl App {
         }
 
         Some((local_x as f64, local_y as f64, false))
+    }
+
+    pub(crate) fn split_divider_at_position(&self, position: Point) -> Option<SplitDivider> {
+        if self.active_browser_id().is_some() || self.modal_open() {
+            return None;
+        }
+
+        let (x, y, width, height) = self.terminal_frame_logical();
+        let within_x = position.x >= x && position.x < x + width;
+        let within_y = position.y >= y && position.y < y + height;
+
+        if !(within_x && within_y) {
+            return None;
+        }
+
+        let local_x = position.x - x;
+        let local_y = position.y - y;
+        let active_terminal_id = self.active_terminal_id()?;
+        self.runtimes
+            .get(&active_terminal_id)
+            .and_then(|runtime| runtime.split_divider_at(local_x, local_y, width, height))
+    }
+
+    pub(crate) fn start_split_resize_drag(&mut self, position: Point) -> bool {
+        let Some(terminal_id) = self.active_terminal_id() else {
+            return false;
+        };
+        let Some(divider) = self.split_divider_at_position(position) else {
+            return false;
+        };
+
+        let grab_offset = match divider.axis {
+            SplitAxis::Vertical => {
+                position.x
+                    - self.terminal_frame_logical().0
+                    - divider.rect.x
+                    - divider.rect.width / 2.0
+            }
+            SplitAxis::Horizontal => {
+                position.y
+                    - self.terminal_frame_logical().1
+                    - divider.rect.y
+                    - divider.rect.height / 2.0
+            }
+        };
+
+        self.split_resize_drag = Some(SplitResizeDragState {
+            terminal_id,
+            branch_path: divider.branch_path,
+            axis: divider.axis,
+            grab_offset,
+        });
+        true
+    }
+
+    pub(crate) fn update_split_resize_drag(&mut self, position: Point) -> bool {
+        let Some(drag) = self.split_resize_drag.clone() else {
+            return false;
+        };
+        if self.active_browser_id().is_some() || self.modal_open() {
+            self.split_resize_drag = None;
+            return false;
+        }
+
+        let (frame_x, frame_y, width, height) = self.terminal_frame_logical();
+        let local_x = position.x - frame_x;
+        let local_y = position.y - frame_y;
+
+        let pointer_x = match drag.axis {
+            SplitAxis::Vertical => local_x - drag.grab_offset,
+            SplitAxis::Horizontal => local_x,
+        };
+        let pointer_y = match drag.axis {
+            SplitAxis::Vertical => local_y,
+            SplitAxis::Horizontal => local_y - drag.grab_offset,
+        };
+
+        self.runtimes
+            .get_mut(&drag.terminal_id)
+            .is_some_and(|runtime| {
+                runtime.set_split_ratio_from_position(
+                    &drag.branch_path,
+                    pointer_x,
+                    pointer_y,
+                    width,
+                    height,
+                )
+            })
+    }
+
+    pub(crate) fn finish_split_resize_drag(&mut self) -> bool {
+        self.split_resize_drag.take().is_some()
+    }
+
+    pub(crate) fn terminal_split_resize_interaction(&self) -> Interaction {
+        if let Some(drag) = &self.split_resize_drag {
+            return match drag.axis {
+                SplitAxis::Vertical => Interaction::ResizingHorizontally,
+                SplitAxis::Horizontal => Interaction::ResizingVertically,
+            };
+        }
+
+        let Some(position) = self.cursor_position_logical else {
+            return Interaction::None;
+        };
+        let Some(divider) = self.split_divider_at_position(position) else {
+            return Interaction::None;
+        };
+
+        match divider.axis {
+            SplitAxis::Vertical => Interaction::ResizingHorizontally,
+            SplitAxis::Horizontal => Interaction::ResizingVertically,
+        }
     }
 
     pub(crate) fn normalize_selection(&mut self) {

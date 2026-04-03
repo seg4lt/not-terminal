@@ -159,7 +159,35 @@ pub(super) fn handle_mouse(app: &mut App, event: mouse::Event) -> Task<Message> 
     }
 
     if app.modal_open() {
+        app.finish_split_resize_drag();
         return Task::none();
+    }
+
+    if app.split_resize_drag.is_some() {
+        match event {
+            mouse::Event::CursorMoved { position } => {
+                app.cursor_position_logical = Some(position);
+                if app.update_split_resize_drag(position) {
+                    app.sync_runtime_views();
+                }
+                return Task::none();
+            }
+            mouse::Event::CursorLeft => {
+                app.cursor_position_logical = None;
+                app.finish_split_resize_drag();
+                return Task::none();
+            }
+            mouse::Event::ButtonReleased(mouse::Button::Left) => {
+                app.finish_split_resize_drag();
+                return Task::none();
+            }
+            mouse::Event::ButtonPressed(_)
+            | mouse::Event::ButtonReleased(_)
+            | mouse::Event::WheelScrolled { .. }
+            | mouse::Event::CursorEntered => {
+                return Task::none();
+            }
+        }
     }
 
     if app.sidebar_drag.is_some() {
@@ -236,6 +264,14 @@ pub(super) fn handle_mouse(app: &mut App, event: mouse::Event) -> Task<Message> 
                     app.sidebar_resizing = false;
                     return app.save_task();
                 }
+                return Task::none();
+            }
+
+            if pressed
+                && button == mouse::Button::Left
+                && let Some(position) = app.cursor_position_logical
+                && app.start_split_resize_drag(position)
+            {
                 return Task::none();
             }
 

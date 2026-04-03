@@ -30,6 +30,13 @@ pub(crate) struct PaneRect {
     pub(crate) height: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SplitDivider {
+    pub(crate) axis: SplitAxis,
+    pub(crate) rect: PaneRect,
+    pub(crate) branch_path: Vec<bool>,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TickOutcome {
     pub(crate) had_pending_work: bool,
@@ -82,6 +89,10 @@ pub(crate) struct RuntimeSession {
     active_pane_id: String,
     zoomed_pane_id: Option<String>,
 }
+
+const SPLIT_RATIO_MIN: f32 = 0.15;
+const SPLIT_RATIO_MAX: f32 = 0.85;
+const SPLIT_DIVIDER_THICKNESS: f32 = 3.0;
 
 impl RuntimeSession {
     pub(crate) fn new(initial_pane: PaneRuntime) -> Self {
@@ -378,6 +389,53 @@ impl RuntimeSession {
         }
 
         Some(((x - rect.x) as f64, (y - rect.y) as f64, changed))
+    }
+
+    pub(crate) fn split_divider_at(
+        &self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> Option<SplitDivider> {
+        if self.zoomed_pane_id.is_some() || self.panes.len() <= 1 {
+            return None;
+        }
+
+        let bounds = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            width: width.max(1.0),
+            height: height.max(1.0),
+        };
+
+        find_divider_at(&self.root, bounds, x, y, &mut Vec::new())
+    }
+
+    pub(crate) fn set_split_ratio_from_position(
+        &mut self,
+        branch_path: &[bool],
+        pointer_x: f32,
+        pointer_y: f32,
+        width: f32,
+        height: f32,
+    ) -> bool {
+        if self.zoomed_pane_id.is_some() || self.panes.len() <= 1 {
+            return false;
+        }
+
+        set_ratio_for_branch(
+            &mut self.root,
+            branch_path,
+            PaneRect {
+                x: 0.0,
+                y: 0.0,
+                width: width.max(1.0),
+                height: height.max(1.0),
+            },
+            pointer_x,
+            pointer_y,
+        )
     }
 
     pub(crate) fn split_from_surface(
@@ -684,10 +742,12 @@ impl RuntimeSession {
         let mut result = Vec::new();
         collect_layout(
             &self.root,
-            0.0,
-            0.0,
-            width.max(1.0),
-            height.max(1.0),
+            PaneRect {
+                x: 0.0,
+                y: 0.0,
+                width: width.max(1.0),
+                height: height.max(1.0),
+            },
             &mut result,
         );
         result
@@ -711,25 +771,10 @@ fn replace_leaf(node: &mut SplitNode, target: &str, replacement: SplitNode) -> b
     }
 }
 
-fn collect_layout(
-    node: &SplitNode,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    result: &mut Vec<(String, PaneRect)>,
-) {
+fn collect_layout(node: &SplitNode, bounds: PaneRect, result: &mut Vec<(String, PaneRect)>) {
     match node {
         SplitNode::Leaf(id) => {
-            result.push((
-                id.clone(),
-                PaneRect {
-                    x,
-                    y,
-                    width,
-                    height,
-                },
-            ));
+            result.push((id.clone(), bounds));
         }
         SplitNode::Branch {
             axis,
@@ -738,18 +783,14 @@ fn collect_layout(
             second,
         } => match axis {
             SplitAxis::Vertical => {
-                let mut first_width = (width * ratio.clamp(0.15, 0.85)).round();
-                first_width = first_width.max(1.0).min((width - 1.0).max(1.0));
-                let second_width = (width - first_width).max(1.0);
-                collect_layout(first, x, y, first_width, height, result);
-                collect_layout(second, x + first_width, y, second_width, height, result);
+                let (first_bounds, _, second_bounds) = split_branch_rects(bounds, *axis, *ratio);
+                collect_layout(first, first_bounds, result);
+                collect_layout(second, second_bounds, result);
             }
             SplitAxis::Horizontal => {
-                let mut first_height = (height * ratio.clamp(0.15, 0.85)).round();
-                first_height = first_height.max(1.0).min((height - 1.0).max(1.0));
-                let second_height = (height - first_height).max(1.0);
-                collect_layout(first, x, y, width, first_height, result);
-                collect_layout(second, x, y + first_height, width, second_height, result);
+                let (first_bounds, _, second_bounds) = split_branch_rects(bounds, *axis, *ratio);
+                collect_layout(first, first_bounds, result);
+                collect_layout(second, second_bounds, result);
             }
         },
     }
@@ -845,7 +886,7 @@ fn resize_for_leaf(
         },
     };
 
-    *ratio = (*ratio + adjustment).clamp(0.15, 0.85);
+    *ratio = (*ratio + adjustment).clamp(SPLIT_RATIO_MIN, SPLIT_RATIO_MAX);
     true
 }
 
@@ -862,6 +903,182 @@ fn equalize_node(node: &mut SplitNode) {
             equalize_node(first);
             equalize_node(second);
         }
+    }
+}
+
+fn split_branch_rects(
+    bounds: PaneRect,
+    axis: SplitAxis,
+    ratio: f32,
+) -> (PaneRect, PaneRect, PaneRect) {
+    match axis {
+        SplitAxis::Vertical => {
+            let divider = split_divider_thickness(bounds.width);
+            let available = (bounds.width - divider).max(0.0);
+            let first_width = split_primary_extent(available, ratio);
+            let second_width = (available - first_width).max(0.0);
+            let divider_x = bounds.x + first_width;
+
+            (
+                PaneRect {
+                    x: bounds.x,
+                    y: bounds.y,
+                    width: first_width,
+                    height: bounds.height,
+                },
+                PaneRect {
+                    x: divider_x,
+                    y: bounds.y,
+                    width: divider,
+                    height: bounds.height,
+                },
+                PaneRect {
+                    x: divider_x + divider,
+                    y: bounds.y,
+                    width: second_width,
+                    height: bounds.height,
+                },
+            )
+        }
+        SplitAxis::Horizontal => {
+            let divider = split_divider_thickness(bounds.height);
+            let available = (bounds.height - divider).max(0.0);
+            let first_height = split_primary_extent(available, ratio);
+            let second_height = (available - first_height).max(0.0);
+            let divider_y = bounds.y + first_height;
+
+            (
+                PaneRect {
+                    x: bounds.x,
+                    y: bounds.y,
+                    width: bounds.width,
+                    height: first_height,
+                },
+                PaneRect {
+                    x: bounds.x,
+                    y: divider_y,
+                    width: bounds.width,
+                    height: divider,
+                },
+                PaneRect {
+                    x: bounds.x,
+                    y: divider_y + divider,
+                    width: bounds.width,
+                    height: second_height,
+                },
+            )
+        }
+    }
+}
+
+fn split_divider_thickness(total_extent: f32) -> f32 {
+    if total_extent <= 2.0 {
+        0.0
+    } else {
+        SPLIT_DIVIDER_THICKNESS.min(total_extent - 2.0)
+    }
+}
+
+fn split_primary_extent(available: f32, ratio: f32) -> f32 {
+    if available <= 2.0 {
+        (available / 2.0).max(0.0)
+    } else {
+        let mut primary = (available * ratio.clamp(SPLIT_RATIO_MIN, SPLIT_RATIO_MAX)).round();
+        primary = primary.max(1.0).min((available - 1.0).max(1.0));
+        primary
+    }
+}
+
+fn find_divider_at(
+    node: &SplitNode,
+    bounds: PaneRect,
+    x: f32,
+    y: f32,
+    path: &mut Vec<bool>,
+) -> Option<SplitDivider> {
+    let SplitNode::Branch {
+        axis,
+        ratio,
+        first,
+        second,
+    } = node
+    else {
+        return None;
+    };
+
+    let (first_bounds, divider, second_bounds) = split_branch_rects(bounds, *axis, *ratio);
+
+    path.push(false);
+    if let Some(found) = find_divider_at(first, first_bounds, x, y, path) {
+        path.pop();
+        return Some(found);
+    }
+    path.pop();
+
+    if x >= divider.x
+        && x < divider.x + divider.width.max(0.0)
+        && y >= divider.y
+        && y < divider.y + divider.height.max(0.0)
+    {
+        return Some(SplitDivider {
+            axis: *axis,
+            rect: divider,
+            branch_path: path.clone(),
+        });
+    }
+
+    path.push(true);
+    let found = find_divider_at(second, second_bounds, x, y, path);
+    path.pop();
+    found
+}
+
+fn set_ratio_for_branch(
+    node: &mut SplitNode,
+    branch_path: &[bool],
+    bounds: PaneRect,
+    pointer_x: f32,
+    pointer_y: f32,
+) -> bool {
+    let SplitNode::Branch {
+        axis,
+        ratio,
+        first,
+        second,
+    } = node
+    else {
+        return false;
+    };
+
+    if branch_path.is_empty() {
+        let (_, divider, _) = split_branch_rects(bounds, *axis, *ratio);
+        let available = match axis {
+            SplitAxis::Vertical => (bounds.width - divider.width).max(0.0),
+            SplitAxis::Horizontal => (bounds.height - divider.height).max(0.0),
+        };
+        if available <= 0.0 {
+            return false;
+        }
+
+        let raw_ratio = match axis {
+            SplitAxis::Vertical => (pointer_x - bounds.x - divider.width / 2.0) / available,
+            SplitAxis::Horizontal => (pointer_y - bounds.y - divider.height / 2.0) / available,
+        };
+        *ratio = raw_ratio.clamp(SPLIT_RATIO_MIN, SPLIT_RATIO_MAX);
+        return true;
+    }
+
+    let (first_bounds, _, second_bounds) = split_branch_rects(bounds, *axis, *ratio);
+    if !branch_path[0] {
+        set_ratio_for_branch(first, &branch_path[1..], first_bounds, pointer_x, pointer_y)
+    } else {
+        set_ratio_for_branch(
+            second,
+            &branch_path[1..],
+            second_bounds,
+            pointer_x,
+            pointer_y,
+        )
     }
 }
 
