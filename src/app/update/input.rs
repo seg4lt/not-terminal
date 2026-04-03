@@ -4,6 +4,7 @@ use crate::app::state::{
     DELETE_WORKTREE_PROJECT_SCROLL_ID, DELETE_WORKTREE_SCROLL_ID, Message, QUICK_OPEN_SCROLL_ID,
     QuickOpenEntryKind, REMOVE_PROJECT_SCROLL_ID, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN,
 };
+use iced::keyboard::key::{Code, Key, Named, Physical};
 use iced::{Task, keyboard, mouse, widget::operation};
 use std::time::Instant;
 
@@ -29,6 +30,21 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
             }
             keyboard::Event::ModifiersChanged(_) => {}
         }
+    }
+
+    if app.terminal_search_is_open() {
+        if let Some(task) = handle_terminal_search_keyboard(app, &event) {
+            return task;
+        }
+
+        let allow_plain_rename = app.active_terminal_id().is_none();
+        let shortcut_action =
+            detect_shortcut(&event, app.keyboard_modifiers, allow_plain_rename, false);
+        if let Some(action) = shortcut_action {
+            return apply_shortcut(app, action);
+        }
+
+        return Task::none();
     }
 
     let allow_plain_rename = app.active_terminal_id().is_none();
@@ -106,7 +122,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
         if should_refresh_branch {
             return app.refresh_active_branch_task();
         }
-        return Task::none();
+        return super::terminal_search_focus_task(app);
     }
 
     if let Some(action) = shortcut_action {
@@ -133,7 +149,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
     if should_refresh_branch {
         return app.refresh_active_branch_task();
     }
-    Task::none()
+    super::terminal_search_focus_task(app)
 }
 
 pub(super) fn handle_mouse(app: &mut App, event: mouse::Event) -> Task<Message> {
@@ -634,4 +650,81 @@ fn modal_selection_scroll_task(
     };
 
     operation::snap_to(scroll_id, operation::RelativeOffset { x: 0.0, y })
+}
+
+fn handle_terminal_search_keyboard(
+    app: &mut App,
+    event: &keyboard::Event,
+) -> Option<Task<Message>> {
+    let keyboard::Event::KeyPressed {
+        key,
+        physical_key,
+        modifiers,
+        ..
+    } = event
+    else {
+        return None;
+    };
+
+    let modifiers = *modifiers | app.keyboard_modifiers;
+    if is_named_key(key, Named::Escape)
+        && !modifiers.logo()
+        && !modifiers.control()
+        && !modifiers.alt()
+    {
+        return Some(super::update(app, Message::TerminalSearchClose));
+    }
+
+    if is_named_key(key, Named::Enter)
+        && !modifiers.logo()
+        && !modifiers.control()
+        && !modifiers.alt()
+    {
+        let message = if modifiers.shift() {
+            Message::TerminalSearchPrevious
+        } else {
+            Message::TerminalSearchNext
+        };
+        return Some(super::update(app, message));
+    }
+
+    if modifiers.logo() && !modifiers.control() && !modifiers.alt() {
+        if is_key_char(key, physical_key, "f", Code::KeyF) && !modifiers.shift() {
+            return Some(super::terminal_search_focus_task(app));
+        }
+
+        if is_key_char(key, physical_key, "g", Code::KeyG) {
+            let message = if modifiers.shift() {
+                Message::TerminalSearchPrevious
+            } else {
+                Message::TerminalSearchNext
+            };
+            return Some(super::update(app, message));
+        }
+
+        if is_key_char(key, physical_key, "e", Code::KeyE) && !modifiers.shift() {
+            let Some(search) = app.terminal_search.as_ref() else {
+                return Some(Task::none());
+            };
+            let terminal_id = search.terminal_id.clone();
+            let surface_ptr = search.surface_ptr;
+            let _ =
+                app.perform_surface_binding_action(&terminal_id, surface_ptr, "search_selection");
+            if app.process_runtime_actions() {
+                app.sync_runtime_views();
+            }
+            return Some(super::terminal_search_focus_task(app));
+        }
+    }
+
+    None
+}
+
+fn is_named_key(key: &keyboard::Key, expected: Named) -> bool {
+    matches!(key.as_ref(), Key::Named(named) if named == expected)
+}
+
+fn is_key_char(key: &keyboard::Key, physical_key: &Physical, expected: &str, code: Code) -> bool {
+    matches!(key.as_ref(), Key::Character(value) if value.eq_ignore_ascii_case(expected))
+        || matches!(physical_key, Physical::Code(value) if *value == code)
 }

@@ -5,7 +5,8 @@ use crate::app::state::{
     QUICK_OPEN_SCROLL_ID, QuickOpenEntry, QuickOpenEntryKind,
 };
 use crate::ghostty_embed::{
-    disable_system_hide_shortcuts, register_focus_toggle_hotkey, take_pending_attention_badge_click,
+    disable_system_hide_shortcuts, host_view_focus_search, register_focus_toggle_hotkey,
+    take_pending_attention_badge_click,
 };
 use iced::{Task, widget::operation, window};
 use std::process::{Command, Stdio};
@@ -64,6 +65,15 @@ fn rescan_status(summary: &ProjectRescanSummary, startup: bool) -> String {
             summary.successful_projects, summary.total_projects, failure_suffix
         )
     }
+}
+
+pub(super) fn terminal_search_focus_task(app: &mut App) -> Task<Message> {
+    if app.take_terminal_search_focus_request()
+        && let Some(host_view) = app.active_terminal_host_view()
+    {
+        host_view_focus_search(host_view);
+    }
+    Task::none()
 }
 
 pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
@@ -163,19 +173,20 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 layout_changed |= tick.layout_changed;
             }
 
+            let search_applied = app.apply_terminal_search_if_due(Instant::now());
             if app.process_runtime_actions() || layout_changed {
                 app.sync_runtime_views();
             }
 
             // Update activity timestamp if there was actual work to do
-            if had_any_work {
+            if had_any_work || search_applied {
                 app.last_ghostty_activity = Instant::now();
             }
             if !app.terminal_progress_active.is_empty() {
                 app.advance_terminal_activity_frame();
             }
 
-            Task::none()
+            terminal_search_focus_task(app)
         }
         Message::Keyboard(event) => input::handle_keyboard(app, event),
         Message::Mouse(event) => input::handle_mouse(app, event),
@@ -609,6 +620,18 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             } else {
                 Task::none()
             }
+        }
+        Message::TerminalSearchNext => {
+            let _ = app.navigate_terminal_search(false);
+            terminal_search_focus_task(app)
+        }
+        Message::TerminalSearchPrevious => {
+            let _ = app.navigate_terminal_search(true);
+            terminal_search_focus_task(app)
+        }
+        Message::TerminalSearchClose => {
+            app.close_terminal_search(true);
+            Task::none()
         }
         Message::StartRenameWorktree {
             project_id,

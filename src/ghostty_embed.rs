@@ -80,6 +80,21 @@ pub enum GhosttyRuntimeAction {
         state: GhosttyProgressReportState,
         progress: Option<u8>,
     },
+    StartSearch {
+        surface_ptr: usize,
+        needle: String,
+    },
+    EndSearch {
+        surface_ptr: usize,
+    },
+    SearchTotal {
+        surface_ptr: usize,
+        total: Option<usize>,
+    },
+    SearchSelected {
+        surface_ptr: usize,
+        selected: Option<usize>,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -121,12 +136,12 @@ mod macos {
     struct RuntimeQueuedAction {
         tag: u32,
         surface: usize,
-        arg0: i32,
-        arg1: i32,
+        arg0: isize,
+        arg1: isize,
         amount: u16,
         reserved: u16,
-        ptr: usize,            // For passing pointers (e.g., title strings)
-        title_copy: [u8; 256], // Buffer containing the copied title string
+        ptr: usize,           // For passing pointers (e.g., copied strings)
+        text_copy: [u8; 256], // Buffer containing copied string payloads
     }
 
     impl Default for RuntimeQueuedAction {
@@ -139,7 +154,7 @@ mod macos {
                 amount: 0,
                 reserved: 0,
                 ptr: 0,
-                title_copy: [0u8; 256],
+                text_copy: [0u8; 256],
             }
         }
     }
@@ -160,6 +175,10 @@ mod macos {
     const RUST_GHOSTTY_ACTION_SET_TITLE: u32 = 10;
     const RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION: u32 = 11;
     const RUST_GHOSTTY_ACTION_PROGRESS_REPORT: u32 = 12;
+    const RUST_GHOSTTY_ACTION_START_SEARCH: u32 = 13;
+    const RUST_GHOSTTY_ACTION_END_SEARCH: u32 = 14;
+    const RUST_GHOSTTY_ACTION_SEARCH_TOTAL: u32 = 15;
+    const RUST_GHOSTTY_ACTION_SEARCH_SELECTED: u32 = 16;
 
     const GHOSTTY_PROGRESS_STATE_REMOVE: i32 = 0;
     const GHOSTTY_PROGRESS_STATE_SET: i32 = 1;
@@ -279,6 +298,8 @@ mod macos {
             height: f64,
         );
         fn rust_ghostty_host_view_set_hidden(host_ns_view: *mut c_void, hidden: bool);
+        fn rust_ghostty_host_view_set_search_active(host_ns_view: *mut c_void, active: bool);
+        fn rust_ghostty_host_view_focus_search(host_ns_view: *mut c_void);
         fn rust_ghostty_host_view_set_split_badge(
             host_ns_view: *mut c_void,
             visible: bool,
@@ -733,6 +754,26 @@ mod macos {
         }
     }
 
+    pub fn host_view_set_search_active(host_ns_view: usize, active: bool) {
+        if host_ns_view == 0 {
+            return;
+        }
+
+        unsafe {
+            rust_ghostty_host_view_set_search_active(host_ns_view as *mut c_void, active);
+        }
+    }
+
+    pub fn host_view_focus_search(host_ns_view: usize) {
+        if host_ns_view == 0 {
+            return;
+        }
+
+        unsafe {
+            rust_ghostty_host_view_focus_search(host_ns_view as *mut c_void);
+        }
+    }
+
     pub fn host_view_set_split_badge(host_ns_view: usize, visible: bool, active: bool) {
         if host_ns_view == 0 {
             return;
@@ -863,7 +904,7 @@ mod macos {
     fn runtime_action_from_raw(raw: RuntimeQueuedAction) -> Option<GhosttyRuntimeAction> {
         match raw.tag {
             RUST_GHOSTTY_ACTION_NEW_SPLIT => {
-                let direction = match raw.arg0 {
+                let direction = match raw.arg0 as i32 {
                     GHOSTTY_SPLIT_DIRECTION_RIGHT => GhosttySplitDirection::Right,
                     GHOSTTY_SPLIT_DIRECTION_DOWN => GhosttySplitDirection::Down,
                     GHOSTTY_SPLIT_DIRECTION_LEFT => GhosttySplitDirection::Left,
@@ -877,7 +918,7 @@ mod macos {
                 })
             }
             RUST_GHOSTTY_ACTION_GOTO_SPLIT => {
-                let direction = match raw.arg0 {
+                let direction = match raw.arg0 as i32 {
                     GHOSTTY_GOTO_SPLIT_PREVIOUS => GhosttyGotoSplitDirection::Previous,
                     GHOSTTY_GOTO_SPLIT_NEXT => GhosttyGotoSplitDirection::Next,
                     GHOSTTY_GOTO_SPLIT_UP => GhosttyGotoSplitDirection::Up,
@@ -893,7 +934,7 @@ mod macos {
                 })
             }
             RUST_GHOSTTY_ACTION_RESIZE_SPLIT => {
-                let direction = match raw.arg0 {
+                let direction = match raw.arg0 as i32 {
                     GHOSTTY_RESIZE_SPLIT_UP => GhosttyResizeSplitDirection::Up,
                     GHOSTTY_RESIZE_SPLIT_LEFT => GhosttyResizeSplitDirection::Left,
                     GHOSTTY_RESIZE_SPLIT_DOWN => GhosttyResizeSplitDirection::Down,
@@ -918,7 +959,7 @@ mod macos {
             }),
             RUST_GHOSTTY_ACTION_GOTO_TAB => Some(GhosttyRuntimeAction::GotoTab {
                 surface_ptr: raw.surface,
-                direction: raw.arg0,
+                direction: raw.arg0 as i32,
             }),
             RUST_GHOSTTY_ACTION_COMMAND_FINISHED => {
                 let exit_code = raw.arg0 as i16;
@@ -930,23 +971,17 @@ mod macos {
             RUST_GHOSTTY_ACTION_RING_BELL => Some(GhosttyRuntimeAction::RingBell {
                 surface_ptr: raw.surface,
             }),
-            RUST_GHOSTTY_ACTION_SET_TITLE => {
-                // The title has been copied into title_copy buffer in the Objective-C shim
-                // Find the null terminator to get the actual string length
-                let len = raw.title_copy.iter().position(|&b| b == 0).unwrap_or(256);
-                let title = String::from_utf8_lossy(&raw.title_copy[..len]).to_string();
-                Some(GhosttyRuntimeAction::SetTitle {
-                    surface_ptr: raw.surface,
-                    title,
-                })
-            }
+            RUST_GHOSTTY_ACTION_SET_TITLE => Some(GhosttyRuntimeAction::SetTitle {
+                surface_ptr: raw.surface,
+                title: raw_copied_text(&raw),
+            }),
             RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION => {
                 Some(GhosttyRuntimeAction::DesktopNotification {
                     surface_ptr: raw.surface,
                 })
             }
             RUST_GHOSTTY_ACTION_PROGRESS_REPORT => {
-                let state = match raw.arg0 {
+                let state = match raw.arg0 as i32 {
                     GHOSTTY_PROGRESS_STATE_REMOVE => GhosttyProgressReportState::Remove,
                     GHOSTTY_PROGRESS_STATE_SET => GhosttyProgressReportState::Set,
                     GHOSTTY_PROGRESS_STATE_ERROR => GhosttyProgressReportState::Error,
@@ -963,8 +998,28 @@ mod macos {
                     progress,
                 })
             }
+            RUST_GHOSTTY_ACTION_START_SEARCH => Some(GhosttyRuntimeAction::StartSearch {
+                surface_ptr: raw.surface,
+                needle: raw_copied_text(&raw),
+            }),
+            RUST_GHOSTTY_ACTION_END_SEARCH => Some(GhosttyRuntimeAction::EndSearch {
+                surface_ptr: raw.surface,
+            }),
+            RUST_GHOSTTY_ACTION_SEARCH_TOTAL => Some(GhosttyRuntimeAction::SearchTotal {
+                surface_ptr: raw.surface,
+                total: usize::try_from(raw.arg0).ok(),
+            }),
+            RUST_GHOSTTY_ACTION_SEARCH_SELECTED => Some(GhosttyRuntimeAction::SearchSelected {
+                surface_ptr: raw.surface,
+                selected: usize::try_from(raw.arg0).ok(),
+            }),
             _ => None,
         }
+    }
+
+    fn raw_copied_text(raw: &RuntimeQueuedAction) -> String {
+        let len = raw.text_copy.iter().position(|&b| b == 0).unwrap_or(256);
+        String::from_utf8_lossy(&raw.text_copy[..len]).to_string()
     }
 
     fn normalize_text_modifiers(modifiers: Modifiers, text: Option<&str>) -> Modifiers {
@@ -1283,10 +1338,10 @@ mod macos {
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    GhosttyEmbed, disable_system_hide_shortcuts, host_view_free, host_view_new,
-    host_view_set_frame, host_view_set_hidden, host_view_set_split_badge, ns_view_ptr,
-    parent_view_set_attention_badge, register_focus_toggle_hotkey,
-    take_pending_attention_badge_click,
+    GhosttyEmbed, disable_system_hide_shortcuts, host_view_focus_search, host_view_free,
+    host_view_new, host_view_set_frame, host_view_set_hidden, host_view_set_search_active,
+    host_view_set_split_badge, ns_view_ptr, parent_view_set_attention_badge,
+    register_focus_toggle_hotkey, take_pending_attention_badge_click,
 };
 
 #[cfg(not(target_os = "macos"))]
@@ -1345,6 +1400,12 @@ pub fn host_view_set_frame(_host_ns_view: usize, _x: f64, _y: f64, _width: f64, 
 
 #[cfg(not(target_os = "macos"))]
 pub fn host_view_set_hidden(_host_ns_view: usize, _hidden: bool) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn host_view_set_search_active(_host_ns_view: usize, _active: bool) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn host_view_focus_search(_host_ns_view: usize) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn host_view_set_split_badge(_host_ns_view: usize, _visible: bool, _active: bool) {}

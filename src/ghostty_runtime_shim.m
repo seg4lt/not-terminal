@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <dispatch/dispatch.h>
 
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
@@ -28,17 +29,21 @@ typedef enum rust_ghostty_action_tag_e {
   RUST_GHOSTTY_ACTION_SET_TITLE = 10,
   RUST_GHOSTTY_ACTION_DESKTOP_NOTIFICATION = 11,
   RUST_GHOSTTY_ACTION_PROGRESS_REPORT = 12,
+  RUST_GHOSTTY_ACTION_START_SEARCH = 13,
+  RUST_GHOSTTY_ACTION_END_SEARCH = 14,
+  RUST_GHOSTTY_ACTION_SEARCH_TOTAL = 15,
+  RUST_GHOSTTY_ACTION_SEARCH_SELECTED = 16,
 } rust_ghostty_action_tag_t;
 
 typedef struct rust_ghostty_action_event_s {
   uint32_t tag;
   uintptr_t surface;
-  int32_t arg0;
-  int32_t arg1;
+  intptr_t arg0;
+  intptr_t arg1;
   uint16_t amount;
   uint16_t reserved;
-  uintptr_t ptr;  // For passing pointers (e.g., title strings)
-  char title_copy[256];  // Buffer to copy title strings immediately
+  uintptr_t ptr;  // For passing pointers (e.g., copied string payloads)
+  char text_copy[256];  // Buffer to copy string payloads immediately
 } rust_ghostty_action_event_t;
 
 typedef struct rust_ghostty_runtime_state_s {
@@ -53,9 +58,11 @@ typedef struct rust_ghostty_runtime_bundle_s {
   rust_ghostty_runtime_state_t *state;
   ghostty_runtime_config_s config;
   void *surface;  // Store surface pointer for clipboard callbacks
+  void *host_view;  // Store host view for native overlays
 } rust_ghostty_runtime_bundle_t;
 
 static atomic_bool rust_ghostty_attention_badge_clicked = false;
+static const void *RUST_GHOSTTY_SEARCH_OVERLAY_KEY = &RUST_GHOSTTY_SEARCH_OVERLAY_KEY;
 
 @interface RustGhosttyAttentionBadgeTarget : NSObject
 - (void)handleAttentionBadgePress:(id)sender;
@@ -63,11 +70,105 @@ static atomic_bool rust_ghostty_attention_badge_clicked = false;
 
 static RustGhosttyAttentionBadgeTarget *rust_ghostty_attention_badge_target(void);
 
+@class RustGhosttySearchOverlayController;
+static RustGhosttySearchOverlayController *rust_ghostty_search_overlay_controller(NSView *host,
+                                                                                  bool create_if_missing);
+static NSView *rust_ghostty_find_focusable_terminal_view(NSView *view);
+
+@interface RustGhosttySearchField : NSSearchField
+@property(nonatomic, assign) RustGhosttySearchOverlayController *overlayController;
+@end
+
+@interface RustGhosttySearchOverlayController : NSObject <NSSearchFieldDelegate> {
+ @private
+  NSView *_host;
+  NSView *_container;
+  RustGhosttySearchField *_field;
+  NSTextField *_countLabel;
+  NSButton *_previousButton;
+  NSButton *_nextButton;
+  NSButton *_closeButton;
+  NSTimer *_debounceTimer;
+  void *_surface;
+  NSInteger _searchTotal;
+  BOOL _hasSearchTotal;
+  NSInteger _searchSelected;
+  BOOL _hasSearchSelected;
+}
+- (instancetype)initWithHost:(NSView *)host;
+- (void)setSurface:(void *)surface;
+- (void)showWithNeedle:(NSString *)needle;
+- (void)hide;
+- (void)focusField;
+- (void)syncFrame;
+- (void)setSearchTotal:(NSInteger)total hasTotal:(BOOL)hasTotal;
+- (void)setSearchSelected:(NSInteger)selected hasSelected:(BOOL)hasSelected;
+- (void)restoreTerminalFocus;
+- (void)deactivate;
+- (void)navigateSearchPrevious:(BOOL)previous;
+- (void)searchSelection;
+@end
+
 @implementation RustGhosttyAttentionBadgeTarget
 - (void)handleAttentionBadgePress:(id)sender {
   (void)sender;
   atomic_store_explicit(&rust_ghostty_attention_badge_clicked, true, memory_order_release);
 }
+@end
+
+@implementation RustGhosttySearchField
+
+- (void)keyDown:(NSEvent *)event {
+  RustGhosttySearchOverlayController *controller = self.overlayController;
+  if (controller != nil) {
+    NSString *characters = [event charactersIgnoringModifiers];
+    if ([characters length] > 0) {
+      unichar ch = [characters characterAtIndex:0];
+      if (ch == 0x1B) {
+        [controller deactivate];
+        return;
+      }
+    }
+    if ([event keyCode] == 53) {
+      [controller deactivate];
+      return;
+    }
+  }
+
+  [super keyDown:event];
+}
+
+- (BOOL)performKeyEquivalent:(NSEvent *)event {
+  RustGhosttySearchOverlayController *controller = self.overlayController;
+  if (controller == nil) {
+    return [super performKeyEquivalent:event];
+  }
+
+  NSEventModifierFlags modifiers = [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+  BOOL command = (modifiers & NSEventModifierFlagCommand) != 0;
+  BOOL shift = (modifiers & NSEventModifierFlagShift) != 0;
+  BOOL control = (modifiers & NSEventModifierFlagControl) != 0;
+  BOOL option = (modifiers & NSEventModifierFlagOption) != 0;
+  NSString *characters = [[event charactersIgnoringModifiers] lowercaseString];
+
+  if (command && !control && !option) {
+    if ([characters isEqualToString:@"g"]) {
+      [controller navigateSearchPrevious:shift];
+      return YES;
+    }
+    if (!shift && [characters isEqualToString:@"e"]) {
+      [controller searchSelection];
+      return YES;
+    }
+    if (!shift && [characters isEqualToString:@"f"]) {
+      [controller focusField];
+      return YES;
+    }
+  }
+
+  return [super performKeyEquivalent:event];
+}
+
 @end
 
 @interface RustGhosttyAttentionBadgeView : NSView {
@@ -169,12 +270,339 @@ static RustGhosttyAttentionBadgeTarget *rust_ghostty_attention_badge_target(void
 
 @end
 
+@implementation RustGhosttySearchOverlayController
+
+- (instancetype)initWithHost:(NSView *)host {
+  self = [super init];
+  if (self == nil) {
+    return nil;
+  }
+
+  _host = host;
+  _surface = NULL;
+  _debounceTimer = nil;
+  _searchTotal = 0;
+  _hasSearchTotal = NO;
+  _searchSelected = 0;
+  _hasSearchSelected = NO;
+
+  _container = [[NSView alloc] initWithFrame:NSZeroRect];
+  [_container setHidden:YES];
+  [_container setWantsLayer:YES];
+  [[_container layer] setCornerRadius:8.0];
+  [[_container layer] setBorderWidth:1.0];
+  [[_container layer] setMasksToBounds:YES];
+  [[_container layer] setBackgroundColor:[[NSColor colorWithCalibratedRed:0.09 green:0.11 blue:0.16 alpha:0.96] CGColor]];
+  [[_container layer] setBorderColor:[[NSColor colorWithCalibratedRed:0.18 green:0.20 blue:0.26 alpha:1.0] CGColor]];
+
+  _field = [[RustGhosttySearchField alloc] initWithFrame:NSZeroRect];
+  [_field setOverlayController:self];
+  [_field setDelegate:self];
+  [_field setPlaceholderString:@"Search"];
+  [_field setFocusRingType:NSFocusRingTypeNone];
+  [_field setBezeled:YES];
+  [_field setBordered:YES];
+  [_field setFont:[NSFont systemFontOfSize:13.0]];
+  [_container addSubview:_field];
+
+  _countLabel = [[NSTextField labelWithString:@""] retain];
+  [_countLabel setAlignment:NSTextAlignmentRight];
+  [_countLabel setFont:[NSFont monospacedDigitSystemFontOfSize:12.0 weight:NSFontWeightRegular]];
+  [_countLabel setTextColor:[NSColor colorWithCalibratedRed:0.70 green:0.74 blue:0.80 alpha:1.0]];
+  [_container addSubview:_countLabel];
+
+  _previousButton = [[NSButton buttonWithTitle:@"Prev" target:self action:@selector(previousPressed:)] retain];
+  [_previousButton setBezelStyle:NSBezelStyleRounded];
+  [_previousButton setFont:[NSFont systemFontOfSize:12.0]];
+  [_container addSubview:_previousButton];
+
+  _nextButton = [[NSButton buttonWithTitle:@"Next" target:self action:@selector(nextPressed:)] retain];
+  [_nextButton setBezelStyle:NSBezelStyleRounded];
+  [_nextButton setFont:[NSFont systemFontOfSize:12.0]];
+  [_container addSubview:_nextButton];
+
+  _closeButton = [[NSButton buttonWithTitle:@"Close" target:self action:@selector(closePressed:)] retain];
+  [_closeButton setBezelStyle:NSBezelStyleRounded];
+  [_closeButton setFont:[NSFont systemFontOfSize:12.0]];
+  [_container addSubview:_closeButton];
+
+  [self syncFrame];
+  return self;
+}
+
+- (void)dealloc {
+  [_debounceTimer invalidate];
+  _debounceTimer = nil;
+  [_container removeFromSuperview];
+  [_container release];
+  [_field release];
+  [_countLabel release];
+  [_previousButton release];
+  [_nextButton release];
+  [_closeButton release];
+  [super dealloc];
+}
+
+- (void)setSurface:(void *)surface {
+  _surface = surface;
+}
+
+- (void)sendActionString:(NSString *)action {
+  if (_surface == NULL || action == nil) {
+    return;
+  }
+
+  const char *utf8 = [action UTF8String];
+  if (utf8 == NULL) {
+    return;
+  }
+
+  ghostty_surface_binding_action((ghostty_surface_t)_surface, utf8, (uintptr_t)strlen(utf8));
+}
+
+- (void)dispatchSearchNow {
+  [_debounceTimer invalidate];
+  _debounceTimer = nil;
+  NSString *action = [NSString stringWithFormat:@"search:%@", [_field stringValue]];
+  [self sendActionString:action];
+}
+
+- (void)debouncedSearchTimerFired:(NSTimer *)timer {
+  if ([timer userInfo] != self) {
+    return;
+  }
+  [self dispatchSearchNow];
+}
+
+- (void)scheduleSearchForCurrentText {
+  [_debounceTimer invalidate];
+  _debounceTimer = nil;
+
+  NSString *value = [_field stringValue];
+  if (value == nil) {
+    value = @"";
+  }
+
+  if ([value length] == 0 || [value length] >= 3) {
+    [self dispatchSearchNow];
+    return;
+  }
+
+  _debounceTimer = [[NSTimer scheduledTimerWithTimeInterval:0.3
+                                                     target:self
+                                                   selector:@selector(debouncedSearchTimerFired:)
+                                                   userInfo:self
+                                                    repeats:NO] retain];
+}
+
+- (void)showWithNeedle:(NSString *)needle {
+  if (needle == nil) {
+    needle = @"";
+  }
+
+  [_field setStringValue:needle];
+  _hasSearchSelected = NO;
+  _hasSearchTotal = NO;
+  [self refreshCountLabel];
+  [self syncFrame];
+
+  NSView *parent = [_host superview];
+  if (parent != nil && [_container superview] != parent) {
+    [parent addSubview:_container positioned:NSWindowAbove relativeTo:_host];
+  } else if (parent != nil) {
+    [parent addSubview:_container positioned:NSWindowAbove relativeTo:_host];
+  }
+
+  [_container setHidden:NO];
+  [self focusField];
+
+  if ([needle length] > 0) {
+    [self scheduleSearchForCurrentText];
+  } else {
+    [_debounceTimer invalidate];
+    _debounceTimer = nil;
+  }
+}
+
+- (void)hide {
+  [_debounceTimer invalidate];
+  _debounceTimer = nil;
+  [_container setHidden:YES];
+  if ([_container superview] != nil) {
+    [_container removeFromSuperview];
+  }
+}
+
+- (void)focusField {
+  if ([_container isHidden]) {
+    return;
+  }
+
+  NSWindow *window = [_host window];
+  if (window != nil) {
+    [window makeFirstResponder:_field];
+  }
+}
+
+- (void)syncFrame {
+  NSView *parent = [_host superview];
+  if (parent == nil) {
+    return;
+  }
+
+  const CGFloat width = 420.0;
+  const CGFloat height = 38.0;
+  const CGFloat inset = 12.0;
+  NSRect hostFrame = [_host frame];
+  CGFloat x = NSMinX(hostFrame) + NSWidth(hostFrame) - width - inset;
+  CGFloat y = [parent isFlipped]
+                  ? (NSMinY(hostFrame) + inset)
+                  : (NSMaxY(hostFrame) - height - inset);
+
+  [_container setFrame:NSMakeRect(x, y, width, height)];
+  [_field setFrame:NSMakeRect(10.0, 8.0, 200.0, 22.0)];
+  [_countLabel setFrame:NSMakeRect(220.0, 10.0, 54.0, 18.0)];
+  [_previousButton setFrame:NSMakeRect(282.0, 7.0, 42.0, 24.0)];
+  [_nextButton setFrame:NSMakeRect(328.0, 7.0, 42.0, 24.0)];
+  [_closeButton setFrame:NSMakeRect(374.0, 7.0, 38.0, 24.0)];
+}
+
+- (void)refreshCountLabel {
+  NSString *label = @"";
+  if (_hasSearchSelected) {
+    NSString *totalLabel = _hasSearchTotal ? [NSString stringWithFormat:@"%ld", (long)_searchTotal] : @"?";
+    label = [NSString stringWithFormat:@"%ld/%@", (long)(_searchSelected + 1), totalLabel];
+  } else if (_hasSearchTotal) {
+    label = [NSString stringWithFormat:@"-/%ld", (long)_searchTotal];
+  }
+  [_countLabel setStringValue:label];
+}
+
+- (void)setSearchTotal:(NSInteger)total hasTotal:(BOOL)hasTotal {
+  _searchTotal = total;
+  _hasSearchTotal = hasTotal;
+  [self refreshCountLabel];
+}
+
+- (void)setSearchSelected:(NSInteger)selected hasSelected:(BOOL)hasSelected {
+  _searchSelected = selected;
+  _hasSearchSelected = hasSelected;
+  [self refreshCountLabel];
+}
+
+- (void)restoreTerminalFocus {
+  NSWindow *window = [_host window];
+  if (window == nil) {
+    return;
+  }
+
+  NSView *candidate = rust_ghostty_find_focusable_terminal_view(_host);
+  if (candidate == nil) {
+    candidate = _host;
+  }
+
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow *strongWindow = [_host window];
+    if (strongWindow == nil) {
+      return;
+    }
+
+    if (candidate != nil) {
+      [strongWindow makeFirstResponder:candidate];
+    }
+  });
+}
+
+- (void)deactivate {
+  if ([_container isHidden]) {
+    return;
+  }
+  [self sendActionString:@"end_search"];
+  [self hide];
+  [self restoreTerminalFocus];
+}
+
+- (void)navigateSearchPrevious:(BOOL)previous {
+  [self sendActionString:(previous ? @"navigate_search:previous" : @"navigate_search:next")];
+  [self focusField];
+}
+
+- (void)searchSelection {
+  [self sendActionString:@"search_selection"];
+}
+
+- (void)previousPressed:(id)sender {
+  (void)sender;
+  [self navigateSearchPrevious:YES];
+}
+
+- (void)nextPressed:(id)sender {
+  (void)sender;
+  [self navigateSearchPrevious:NO];
+}
+
+- (void)closePressed:(id)sender {
+  (void)sender;
+  [self deactivate];
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification {
+  if ([notification object] != _field) {
+    return;
+  }
+  _hasSearchSelected = NO;
+  _hasSearchTotal = NO;
+  [self refreshCountLabel];
+  [self scheduleSearchForCurrentText];
+}
+
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector {
+  (void)control;
+  (void)textView;
+
+  if (commandSelector == @selector(insertNewline:)) {
+    NSEventModifierFlags modifiers = [[NSApp currentEvent] modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+    BOOL previous = (modifiers & NSEventModifierFlagShift) != 0;
+    [self navigateSearchPrevious:previous];
+    return YES;
+  }
+
+  if (commandSelector == @selector(cancelOperation:)) {
+    [self deactivate];
+    return YES;
+  }
+
+  return NO;
+}
+
+@end
+
 static RustGhosttyAttentionBadgeTarget *rust_ghostty_attention_badge_target(void) {
   static RustGhosttyAttentionBadgeTarget *target = nil;
   if (target == nil) {
     target = [[RustGhosttyAttentionBadgeTarget alloc] init];
   }
   return target;
+}
+
+static NSView *rust_ghostty_find_focusable_terminal_view(NSView *view) {
+  if (view == nil) {
+    return nil;
+  }
+
+  NSArray<NSView *> *subviews = [view subviews];
+  for (NSView *subview in [subviews reverseObjectEnumerator]) {
+    NSView *candidate = rust_ghostty_find_focusable_terminal_view(subview);
+    if (candidate != nil) {
+      return candidate;
+    }
+  }
+
+  if ([view acceptsFirstResponder]) {
+    return view;
+  }
+
+  return nil;
 }
 
 static void rust_ghostty_wakeup_cb(void *userdata) {
@@ -222,8 +650,15 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
   }
 
   uintptr_t surface_ptr = 0;
+  rust_ghostty_runtime_bundle_t *surface_bundle = NULL;
+  NSView *surface_host = nil;
   if (target.tag == GHOSTTY_TARGET_SURFACE) {
     surface_ptr = (uintptr_t)target.target.surface;
+    surface_bundle =
+        (rust_ghostty_runtime_bundle_t *)ghostty_surface_userdata(target.target.surface);
+    if (surface_bundle != NULL) {
+      surface_host = (NSView *)surface_bundle->host_view;
+    }
   }
 
   rust_ghostty_action_event_t action_event = {
@@ -274,11 +709,11 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
       // Copy the title string immediately - the original pointer may be freed
       const char *title = action.action.set_title.title;
       if (title != NULL) {
-        strncpy(action_event.title_copy, title, sizeof(action_event.title_copy) - 1);
-        action_event.title_copy[sizeof(action_event.title_copy) - 1] = '\0';
-        action_event.ptr = (uintptr_t)action_event.title_copy;
+        strncpy(action_event.text_copy, title, sizeof(action_event.text_copy) - 1);
+        action_event.text_copy[sizeof(action_event.text_copy) - 1] = '\0';
+        action_event.ptr = (uintptr_t)action_event.text_copy;
       } else {
-        action_event.title_copy[0] = '\0';
+        action_event.text_copy[0] = '\0';
         action_event.ptr = 0;
       }
       break;
@@ -293,6 +728,57 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
       action_event.arg1 = (int32_t)action.action.progress_report.progress;
       break;
     }
+    case GHOSTTY_ACTION_START_SEARCH: {
+      const char *needle = action.action.start_search.needle;
+      if (surface_host != nil) {
+        char *needle_copy = (needle != NULL) ? strdup(needle) : NULL;
+        dispatch_async(dispatch_get_main_queue(), ^{
+          RustGhosttySearchOverlayController *controller =
+              rust_ghostty_search_overlay_controller(surface_host, true);
+          if (surface_bundle != NULL) {
+            [controller setSurface:surface_bundle->surface];
+          }
+          NSString *text = (needle_copy != NULL)
+                               ? [NSString stringWithUTF8String:needle_copy]
+                               : @"";
+          [controller showWithNeedle:(text != nil ? text : @"")];
+          if (needle_copy != NULL) {
+            free(needle_copy);
+          }
+        });
+      }
+      return true;
+    }
+    case GHOSTTY_ACTION_END_SEARCH:
+      if (surface_host != nil) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          RustGhosttySearchOverlayController *controller =
+              rust_ghostty_search_overlay_controller(surface_host, false);
+          [controller hide];
+          [controller restoreTerminalFocus];
+        });
+      }
+      return true;
+    case GHOSTTY_ACTION_SEARCH_TOTAL:
+      if (surface_host != nil) {
+        const ssize_t total = action.action.search_total.total;
+        dispatch_async(dispatch_get_main_queue(), ^{
+          RustGhosttySearchOverlayController *controller =
+              rust_ghostty_search_overlay_controller(surface_host, false);
+          [controller setSearchTotal:(NSInteger)total hasTotal:(total >= 0)];
+        });
+      }
+      return true;
+    case GHOSTTY_ACTION_SEARCH_SELECTED:
+      if (surface_host != nil) {
+        const ssize_t selected = action.action.search_selected.selected;
+        dispatch_async(dispatch_get_main_queue(), ^{
+          RustGhosttySearchOverlayController *controller =
+              rust_ghostty_search_overlay_controller(surface_host, false);
+          [controller setSearchSelected:(NSInteger)selected hasSelected:(selected >= 0)];
+        });
+      }
+      return true;
     default:
       return false;
   }
@@ -414,6 +900,7 @@ rust_ghostty_runtime_bundle_t *rust_ghostty_runtime_bundle_new(void) {
 
   bundle->state = state;
   bundle->surface = NULL;
+  bundle->host_view = NULL;
   bundle->config.userdata = state;  // Used by action callbacks via ghostty_app_userdata
   bundle->config.supports_selection_clipboard = false;
   bundle->config.wakeup_cb = rust_ghostty_wakeup_cb;
@@ -545,6 +1032,10 @@ void *rust_ghostty_surface_new_macos(void *surface_new_fn_raw,
     rust_ghostty_runtime_bundle_t *bundle =
         (rust_ghostty_runtime_bundle_t *)runtime_bundle;
     bundle->surface = surface;
+    bundle->host_view = ns_view;
+    RustGhosttySearchOverlayController *controller =
+        rust_ghostty_search_overlay_controller((NSView *)ns_view, true);
+    [controller setSurface:surface];
   }
 
   return surface;
@@ -571,6 +1062,32 @@ void *rust_ghostty_host_view_new(void *parent_ns_view) {
 
 static const void *RUST_GHOSTTY_SPLIT_BADGE_KEY = &RUST_GHOSTTY_SPLIT_BADGE_KEY;
 static const void *RUST_GHOSTTY_ATTENTION_BADGE_KEY = &RUST_GHOSTTY_ATTENTION_BADGE_KEY;
+
+static RustGhosttySearchOverlayController *rust_ghostty_search_overlay_controller(NSView *host,
+                                                                                  bool create_if_missing) {
+  if (host == nil) {
+    return nil;
+  }
+
+  RustGhosttySearchOverlayController *existing =
+      (RustGhosttySearchOverlayController *)objc_getAssociatedObject(host, RUST_GHOSTTY_SEARCH_OVERLAY_KEY);
+  if (existing != nil || !create_if_missing) {
+    return existing;
+  }
+
+  RustGhosttySearchOverlayController *controller =
+      [[RustGhosttySearchOverlayController alloc] initWithHost:host];
+  if (controller == nil) {
+    return nil;
+  }
+
+  objc_setAssociatedObject(host,
+                           RUST_GHOSTTY_SEARCH_OVERLAY_KEY,
+                           controller,
+                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  [controller release];
+  return controller;
+}
 
 static NSTextField *rust_ghostty_split_badge_label(NSView *host, bool create_if_missing) {
   if (host == nil) {
@@ -753,6 +1270,9 @@ void rust_ghostty_host_view_set_frame(void *host_ns_view,
                             (CGFloat)(width < 1.0 ? 1.0 : width),
                             (CGFloat)(height < 1.0 ? 1.0 : height));
   [host setFrame:frame];
+  RustGhosttySearchOverlayController *controller =
+      rust_ghostty_search_overlay_controller(host, false);
+  [controller syncFrame];
 }
 
 void rust_ghostty_host_view_set_hidden(void *host_ns_view, bool hidden) {
@@ -762,6 +1282,37 @@ void rust_ghostty_host_view_set_hidden(void *host_ns_view, bool hidden) {
 
   NSView *host = (NSView *)host_ns_view;
   [host setHidden:hidden ? YES : NO];
+  RustGhosttySearchOverlayController *controller =
+      rust_ghostty_search_overlay_controller(host, false);
+  if (hidden) {
+    [controller deactivate];
+  } else {
+    [controller syncFrame];
+  }
+}
+
+void rust_ghostty_host_view_set_search_active(void *host_ns_view, bool active) {
+  if (host_ns_view == NULL) {
+    return;
+  }
+
+  NSView *host = (NSView *)host_ns_view;
+  RustGhosttySearchOverlayController *controller =
+      rust_ghostty_search_overlay_controller(host, false);
+  if (!active) {
+    [controller deactivate];
+  }
+}
+
+void rust_ghostty_host_view_focus_search(void *host_ns_view) {
+  if (host_ns_view == NULL) {
+    return;
+  }
+
+  NSView *host = (NSView *)host_ns_view;
+  RustGhosttySearchOverlayController *controller =
+      rust_ghostty_search_overlay_controller(host, false);
+  [controller focusField];
 }
 
 void rust_ghostty_host_view_free(void *host_ns_view) {
@@ -774,6 +1325,12 @@ void rust_ghostty_host_view_free(void *host_ns_view) {
   if (label != nil) {
     [label removeFromSuperview];
     objc_setAssociatedObject(host, RUST_GHOSTTY_SPLIT_BADGE_KEY, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  }
+  RustGhosttySearchOverlayController *search_controller =
+      rust_ghostty_search_overlay_controller(host, false);
+  if (search_controller != nil) {
+    [search_controller hide];
+    objc_setAssociatedObject(host, RUST_GHOSTTY_SEARCH_OVERLAY_KEY, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
   }
   [host removeFromSuperview];
   [host release];

@@ -48,6 +48,7 @@ pub(crate) const DELETE_WORKTREE_PROJECT_SCROLL_ID: &str = "delete-worktree-proj
 pub(crate) const DELETE_WORKTREE_SCROLL_ID: &str = "delete-worktree-scroll";
 pub(crate) const MAX_PINNED_TERMINALS: usize = 9;
 const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
+pub(crate) const TERMINAL_SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
 
 /// Represents the different states of the sidebar
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +210,18 @@ pub(crate) struct QuickOpenEntry {
     pub(crate) kind: QuickOpenEntryKind,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct TerminalSearchState {
+    pub(crate) terminal_id: String,
+    pub(crate) surface_ptr: usize,
+    pub(crate) query: String,
+    pub(crate) total: Option<usize>,
+    pub(crate) selected: Option<usize>,
+    pub(crate) pending_apply: bool,
+    pub(crate) pending_deadline: Option<Instant>,
+    pub(crate) focus_requested: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SidebarDragItem {
     Project {
@@ -340,6 +353,8 @@ pub(crate) struct App {
     pub(crate) terminal_activity_frame: usize,
     /// Browser webviews by ID
     pub(crate) browser_webviews: HashMap<String, WebView>,
+    /// Ephemeral terminal search state for the active Ghostty surface.
+    pub(crate) terminal_search: Option<TerminalSearchState>,
 }
 
 #[derive(Debug, Clone)]
@@ -402,6 +417,9 @@ pub(crate) enum Message {
     QuickOpenSubmit,
     QuickOpenSelect(usize),
     QuickOpenCloseTerminal(String),
+    TerminalSearchNext,
+    TerminalSearchPrevious,
+    TerminalSearchClose,
     StartSidebarDrag(SidebarDragItem),
     SidebarDragHover(SidebarDragItem),
     SidebarDragHoverExit(SidebarDragItem),
@@ -523,6 +541,7 @@ impl App {
             terminal_titles: HashMap::new(),
             terminal_activity_frame: 0,
             browser_webviews: HashMap::new(),
+            terminal_search: None,
         };
 
         (
@@ -1670,7 +1689,218 @@ impl App {
             .and_then(|runtime| runtime.active_ghostty_mut())
     }
 
+    pub(crate) fn active_terminal_surface_ptr(&self) -> Option<usize> {
+        let active_terminal_id = self.active_terminal_id()?;
+        self.runtimes
+            .get(&active_terminal_id)
+            .and_then(RuntimeSession::active_surface_ptr)
+    }
+
+    pub(crate) fn active_terminal_host_view(&self) -> Option<usize> {
+        let active_terminal_id = self.active_terminal_id()?;
+        self.runtimes
+            .get(&active_terminal_id)
+            .and_then(RuntimeSession::active_host_view)
+    }
+
+    pub(crate) fn terminal_search_is_open(&self) -> bool {
+        self.terminal_search.is_some()
+    }
+
+    pub(crate) fn take_terminal_search_focus_request(&mut self) -> bool {
+        let Some(search) = self.terminal_search.as_mut() else {
+            return false;
+        };
+
+        let requested = search.focus_requested;
+        search.focus_requested = false;
+        requested
+    }
+
+    pub(crate) fn open_terminal_search(
+        &mut self,
+        terminal_id: String,
+        surface_ptr: usize,
+        needle: String,
+    ) -> bool {
+        let mut search = match self.terminal_search.take() {
+            Some(existing)
+                if existing.terminal_id == terminal_id && existing.surface_ptr == surface_ptr =>
+            {
+                existing
+            }
+            _ => TerminalSearchState {
+                terminal_id,
+                surface_ptr,
+                query: String::new(),
+                total: None,
+                selected: None,
+                pending_apply: false,
+                pending_deadline: None,
+                focus_requested: false,
+            },
+        };
+
+        search.focus_requested = true;
+        if !needle.is_empty() && search.query != needle {
+            search.query = needle;
+            search.total = None;
+            search.selected = None;
+            search.pending_apply = true;
+            search.pending_deadline = terminal_search_deadline(&search.query);
+        }
+
+        let should_apply_now = search.pending_apply && search.pending_deadline.is_none();
+        self.terminal_search = Some(search);
+
+        if should_apply_now {
+            let _ = self.apply_terminal_search_if_due(Instant::now());
+        }
+
+        true
+    }
+
+    pub(crate) fn apply_terminal_search_if_due(&mut self, now: Instant) -> bool {
+        let (terminal_id, surface_ptr, query) = {
+            let Some(search) = self.terminal_search.as_mut() else {
+                return false;
+            };
+            if !search.pending_apply {
+                return false;
+            }
+            if let Some(deadline) = search.pending_deadline
+                && now < deadline
+            {
+                return false;
+            }
+
+            search.pending_apply = false;
+            search.pending_deadline = None;
+            (
+                search.terminal_id.clone(),
+                search.surface_ptr,
+                search.query.clone(),
+            )
+        };
+
+        let action = format!("search:{query}");
+        self.perform_surface_binding_action(&terminal_id, surface_ptr, &action)
+    }
+
+    pub(crate) fn navigate_terminal_search(&mut self, previous: bool) -> bool {
+        let Some(search) = self.terminal_search.as_ref() else {
+            return false;
+        };
+        let terminal_id = search.terminal_id.clone();
+        let surface_ptr = search.surface_ptr;
+
+        let action = if previous {
+            "navigate_search:previous"
+        } else {
+            "navigate_search:next"
+        };
+        self.perform_surface_binding_action(&terminal_id, surface_ptr, action)
+    }
+
+    pub(crate) fn close_terminal_search(&mut self, notify_ghostty: bool) -> bool {
+        let Some(search) = self.terminal_search.take() else {
+            return false;
+        };
+
+        if notify_ghostty {
+            let _ = self.perform_surface_binding_action(
+                &search.terminal_id,
+                search.surface_ptr,
+                "end_search",
+            );
+        }
+
+        true
+    }
+
+    pub(crate) fn reconcile_terminal_search(&mut self) -> bool {
+        let Some(search) = self.terminal_search.as_ref() else {
+            return false;
+        };
+
+        let runtime_exists = self.runtimes.contains_key(&search.terminal_id);
+        let active_surface_ptr = self
+            .runtimes
+            .get(&search.terminal_id)
+            .and_then(RuntimeSession::active_surface_ptr);
+        let should_close = self.active_browser().is_some()
+            || self.modal_open()
+            || self.active_terminal_id().as_deref() != Some(search.terminal_id.as_str())
+            || active_surface_ptr != Some(search.surface_ptr);
+
+        if should_close {
+            return self.close_terminal_search(runtime_exists);
+        }
+
+        false
+    }
+
+    pub(crate) fn sync_terminal_search_total(
+        &mut self,
+        terminal_id: &str,
+        surface_ptr: usize,
+        total: Option<usize>,
+    ) -> bool {
+        let Some(search) = self.terminal_search.as_mut() else {
+            return false;
+        };
+        if search.terminal_id != terminal_id || search.surface_ptr != surface_ptr {
+            return false;
+        }
+        if search.total == total {
+            return false;
+        }
+
+        search.total = total;
+        true
+    }
+
+    pub(crate) fn sync_terminal_search_selected(
+        &mut self,
+        terminal_id: &str,
+        surface_ptr: usize,
+        selected: Option<usize>,
+    ) -> bool {
+        let Some(search) = self.terminal_search.as_mut() else {
+            return false;
+        };
+        if search.terminal_id != terminal_id || search.surface_ptr != surface_ptr {
+            return false;
+        }
+        if search.selected == selected {
+            return false;
+        }
+
+        search.selected = selected;
+        true
+    }
+
+    pub(crate) fn perform_surface_binding_action(
+        &mut self,
+        terminal_id: &str,
+        surface_ptr: usize,
+        action: &str,
+    ) -> bool {
+        let Some(runtime) = self.runtimes.get_mut(terminal_id) else {
+            return false;
+        };
+        let Some(ghostty) = runtime.ghostty_for_surface_mut(surface_ptr) else {
+            return false;
+        };
+
+        let performed = ghostty.binding_action(action);
+        ghostty.refresh();
+        ghostty.force_tick();
+        performed
+    }
+
     pub(crate) fn sync_runtime_views(&mut self) {
+        let _ = self.reconcile_terminal_search();
         let (x_logical, y_logical, width_logical, height_logical) = self.terminal_frame_logical();
         let scale = self.window_scale_factor.max(0.1) as f64;
         let active_terminal_id = self.active_terminal_id();
@@ -1851,6 +2081,36 @@ impl App {
                         self.set_terminal_progress_active(&terminal_id, active);
                         true
                     }
+                    GhosttyRuntimeAction::StartSearch {
+                        surface_ptr,
+                        needle,
+                    } => {
+                        if self.active_browser().is_some()
+                            || self.active_terminal_id().as_deref() != Some(terminal_id.as_str())
+                            || self.active_terminal_surface_ptr() != Some(surface_ptr)
+                        {
+                            false
+                        } else {
+                            self.open_terminal_search(terminal_id.clone(), surface_ptr, needle)
+                        }
+                    }
+                    GhosttyRuntimeAction::EndSearch { surface_ptr } => {
+                        let should_close = self.terminal_search.as_ref().is_some_and(|search| {
+                            search.terminal_id == terminal_id && search.surface_ptr == surface_ptr
+                        });
+                        if should_close {
+                            self.close_terminal_search(false)
+                        } else {
+                            false
+                        }
+                    }
+                    GhosttyRuntimeAction::SearchTotal { surface_ptr, total } => {
+                        self.sync_terminal_search_total(&terminal_id, surface_ptr, total)
+                    }
+                    GhosttyRuntimeAction::SearchSelected {
+                        surface_ptr,
+                        selected,
+                    } => self.sync_terminal_search_selected(&terminal_id, surface_ptr, selected),
                 };
 
                 changed = changed || action_changed;
@@ -1861,6 +2121,13 @@ impl App {
     }
 
     pub(crate) fn remove_runtime(&mut self, terminal_id: &str) {
+        if self
+            .terminal_search
+            .as_ref()
+            .is_some_and(|search| search.terminal_id == terminal_id)
+        {
+            self.terminal_search = None;
+        }
         self.runtimes.remove(terminal_id);
         self.branch_by_terminal.remove(terminal_id);
         self.remove_terminal_status(terminal_id);
@@ -2262,5 +2529,13 @@ fn command_palette_entry(
         detail,
         search_text,
         action,
+    }
+}
+
+fn terminal_search_deadline(query: &str) -> Option<Instant> {
+    if query.is_empty() || query.chars().count() >= 3 {
+        None
+    } else {
+        Some(Instant::now() + TERMINAL_SEARCH_DEBOUNCE)
     }
 }

@@ -1,7 +1,7 @@
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyGotoSplitDirection, GhosttyResizeSplitDirection, GhosttyRuntimeAction,
     GhosttySplitDirection, host_view_free, host_view_set_frame, host_view_set_hidden,
-    host_view_set_split_badge,
+    host_view_set_search_active, host_view_set_split_badge,
 };
 use std::collections::HashMap;
 
@@ -100,6 +100,28 @@ impl RuntimeSession {
     pub(crate) fn active_ghostty_mut(&mut self) -> Option<&mut GhosttyEmbed> {
         self.panes
             .get_mut(&self.active_pane_id)
+            .map(|pane| &mut pane.ghostty)
+    }
+
+    pub(crate) fn active_surface_ptr(&self) -> Option<usize> {
+        self.panes
+            .get(&self.active_pane_id)
+            .map(PaneRuntime::surface_ptr)
+    }
+
+    pub(crate) fn active_host_view(&self) -> Option<usize> {
+        self.panes
+            .get(&self.active_pane_id)
+            .map(|pane| pane.host_view)
+    }
+
+    pub(crate) fn ghostty_for_surface_mut(
+        &mut self,
+        surface_ptr: usize,
+    ) -> Option<&mut GhosttyEmbed> {
+        self.panes
+            .values_mut()
+            .find(|pane| pane.surface_ptr() == surface_ptr)
             .map(|pane| &mut pane.ghostty)
     }
 
@@ -209,6 +231,7 @@ impl RuntimeSession {
                     pane.last_split_badge = Some((false, false));
                 }
                 if pane.last_focus != Some(false) {
+                    host_view_set_search_active(pane.host_view, false);
                     pane.ghostty.set_focus(false);
                     pane.last_focus = Some(false);
                 }
@@ -238,6 +261,7 @@ impl RuntimeSession {
                     pane.last_split_badge = Some((false, false));
                 }
                 if pane.last_focus != Some(false) {
+                    host_view_set_search_active(pane.host_view, false);
                     pane.ghostty.set_focus(false);
                     pane.last_focus = Some(false);
                 }
@@ -289,6 +313,7 @@ impl RuntimeSession {
             let focused = pane_id == &self.active_pane_id;
             let focus_changed = pane.last_focus != Some(focused);
             if focus_changed {
+                host_view_set_search_active(pane.host_view, focused);
                 pane.ghostty.set_focus(focused);
                 pane.last_focus = Some(focused);
             }
