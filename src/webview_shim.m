@@ -512,6 +512,10 @@ void webview_set_hidden(void *webview_ptr, bool hidden) {
         return;
     }
 
+    if (hidden) {
+        rust_webview_restore_safe_responder(wrapper);
+    }
+
     [wrapper->container setHidden:hidden ? YES : NO];
 }
 

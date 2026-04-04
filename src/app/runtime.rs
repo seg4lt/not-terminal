@@ -812,6 +812,9 @@ impl RuntimeSession {
         let Some(diff_pane_id) = self.diff_pane_id() else {
             return false;
         };
+        if let Some(diff_pane) = self.panes.get(&diff_pane_id).and_then(SessionPane::diff) {
+            diff_pane.webview.lose_focus();
+        }
         let active_terminal_id = self.active_terminal_pane_id();
         let removed = self.remove_pane(&diff_pane_id);
         if removed && let Some(active_terminal_id) = active_terminal_id {
@@ -975,6 +978,7 @@ fn hide_session_pane(pane: &mut SessionPane) {
         }
         SessionPane::Diff(pane) => {
             if pane.last_hidden != Some(true) {
+                pane.webview.lose_focus();
                 pane.webview.set_hidden(true);
                 pane.last_hidden = Some(true);
             }
