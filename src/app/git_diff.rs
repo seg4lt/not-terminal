@@ -1128,9 +1128,10 @@ body.tree-open .diff-zoom-surface {
   top: 0;
   z-index: 30;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px 8px;
   margin-bottom: 4px;
   padding: 0 0 6px;
   background: linear-gradient(180deg, rgba(15, 16, 17, 0.98) 0%, rgba(15, 16, 17, 0.92) 72%, rgba(15, 16, 17, 0) 100%);
@@ -1139,7 +1140,7 @@ body.tree-open .diff-zoom-surface {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  min-width: 0;
+  flex-shrink: 0;
 }
 .toolbar-total {
   font-size: 11px;
@@ -1153,17 +1154,17 @@ body.tree-open .diff-zoom-surface {
   color: #ff5f61;
 }
 .view-toolbar-search {
-  flex: 1 1 280px;
-  min-width: 160px;
+  flex: 1 1 200px;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
 }
 .toolbar-search {
-  flex: 1 1 240px;
+  flex: 1 1 200px;
   max-width: 320px;
-  min-width: 120px;
+  min-width: 0;
   height: 28px;
   display: inline-flex;
   align-items: center;
@@ -1223,6 +1224,7 @@ body.tree-open .diff-zoom-surface {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
 }
 .toolbar-btn {
   width: 28px;
