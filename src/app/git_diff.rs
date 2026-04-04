@@ -11,7 +11,6 @@ pub(crate) struct DiffSnapshot {
 #[derive(Debug, Clone)]
 pub(crate) struct DiffSection {
     pub(crate) label: &'static str,
-    pub(crate) empty_label: &'static str,
     pub(crate) files: Vec<DiffFile>,
 }
 
@@ -46,16 +45,10 @@ pub(crate) struct DiffLine {
 }
 
 pub(crate) fn load_snapshot(worktree_path: &str) -> Result<DiffSnapshot, String> {
-    let unstaged = load_section(
-        worktree_path,
-        "Unstaged",
-        "No unstaged changes",
-        &["diff", "--no-ext-diff"],
-    )?;
+    let unstaged = load_section(worktree_path, "Unstaged", &["diff", "--no-ext-diff"])?;
     let staged = load_section(
         worktree_path,
         "Staged",
-        "No staged changes",
         &["diff", "--no-ext-diff", "--staged"],
     )?;
 
@@ -91,12 +84,7 @@ pub(crate) fn render_error_html(worktree_path: &str, error: &str) -> String {
 pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
     let title = repo_title(&snapshot.worktree_path);
     let file_tree = render_file_tree(snapshot);
-    let sections = snapshot
-        .sections
-        .iter()
-        .map(render_section)
-        .collect::<Vec<_>>()
-        .join("");
+    let sections = render_snapshot_files(snapshot);
     let body = format!(
         "<div class=\"diff-shell\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"view-toolbar\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button></div><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div>",
         file_tree,
@@ -109,10 +97,37 @@ pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
     render_document(&title, &body)
 }
 
+fn render_snapshot_files(snapshot: &DiffSnapshot) -> String {
+    let total_count = snapshot
+        .sections
+        .iter()
+        .map(|section| section.files.len())
+        .sum::<usize>();
+
+    if total_count == 0 {
+        return String::from("<div class=\"empty-state\">No changes to display.</div>");
+    }
+
+    let files = snapshot
+        .sections
+        .iter()
+        .flat_map(|section| {
+            section.files.iter().map(move |file| {
+                render_file(file, section.label, &file_dom_id(section.label, &file.path))
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    format!(
+        "<section class=\"diff-section\"><div class=\"section-header\"><div class=\"section-title\">Changes</div><div class=\"section-count\">{}</div></div>{}</section>",
+        total_count, files
+    )
+}
+
 fn load_section(
     worktree_path: &str,
     label: &'static str,
-    empty_label: &'static str,
     args: &[&str],
 ) -> Result<DiffSection, String> {
     let output = Command::new("git")
@@ -137,7 +152,6 @@ fn load_section(
 
     Ok(DiffSection {
         label,
-        empty_label,
         files: parse_patch(&patch),
     })
 }
@@ -277,30 +291,6 @@ fn parse_hunk_range(spec: &str) -> Option<usize> {
     number.parse().ok()
 }
 
-fn render_section(section: &DiffSection) -> String {
-    let count = section.files.len();
-    let files = if section.files.is_empty() {
-        format!(
-            "<div class=\"empty-state\">{}</div>",
-            escape_html(section.empty_label)
-        )
-    } else {
-        section
-            .files
-            .iter()
-            .map(|file| render_file(file, section.label, &file_dom_id(section.label, &file.path)))
-            .collect::<Vec<_>>()
-            .join("")
-    };
-
-    format!(
-        "<section class=\"diff-section\"><div class=\"section-header\"><div class=\"section-title\">{}</div><div class=\"section-count\">{}</div></div>{}</section>",
-        escape_html(section.label),
-        count,
-        files
-    )
-}
-
 fn render_file(file: &DiffFile, section_label: &str, file_id: &str) -> String {
     let language = infer_language(&file.path);
     let hunks = if file.hunks.is_empty() {
@@ -317,9 +307,14 @@ fn render_file(file: &DiffFile, section_label: &str, file_id: &str) -> String {
     } else {
         ""
     };
+    let stage_label = if section_label == "Unstaged" {
+        "working"
+    } else {
+        "index"
+    };
 
     format!(
-        "<details id=\"{}\" class=\"file-card\" data-language=\"{}\" data-file-id=\"{}\" data-stage=\"{}\" data-search=\"{} {}\"{}><summary><span class=\"file-main\"><span class=\"file-path\">{}</span></span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\">{}</div></details>",
+        "<details id=\"{}\" class=\"file-card\" data-language=\"{}\" data-file-id=\"{}\" data-stage=\"{}\" data-search=\"{} {}\"{}><summary><span class=\"file-main\"><span class=\"file-path\">{}</span><span class=\"file-stage-meta\">{}</span></span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\">{}</div></details>",
         escape_html(file_id),
         language,
         escape_html(file_id),
@@ -328,6 +323,7 @@ fn render_file(file: &DiffFile, section_label: &str, file_id: &str) -> String {
         escape_html(section_label),
         open_attr,
         escape_html(&file.path),
+        escape_html(stage_label),
         file.added,
         file.removed,
         hunks
@@ -335,42 +331,25 @@ fn render_file(file: &DiffFile, section_label: &str, file_id: &str) -> String {
 }
 
 fn render_file_tree(snapshot: &DiffSnapshot) -> String {
-    let mut unstaged_root = TreeDirectory::default();
-    let mut staged_root = TreeDirectory::default();
-    let mut unstaged_count = 0usize;
-    let mut staged_count = 0usize;
+    let mut root = TreeDirectory::default();
+    let mut total_count = 0usize;
 
     for section in &snapshot.sections {
         for file in &section.files {
-            if section.label == "Unstaged" {
-                insert_tree_file(&mut unstaged_root, file, section.label);
-                unstaged_count += 1;
-            } else {
-                insert_tree_file(&mut staged_root, file, section.label);
-                staged_count += 1;
-            }
+            insert_tree_file(&mut root, file, section.label);
+            total_count += 1;
         }
     }
-
-    let total_count = unstaged_count + staged_count;
-    let unstaged_html = render_tree_stage_section(
-        "Working Copy",
-        "Live edits",
-        "tree-stage-heading-unstaged",
-        &unstaged_root,
-        unstaged_count,
-    );
-    let staged_html = render_tree_stage_section(
-        "Index",
-        "Ready to commit",
-        "tree-stage-heading-staged",
-        &staged_root,
-        staged_count,
-    );
+    let tree_html = if root.directories.is_empty() && root.files.is_empty() {
+        String::from("<div class=\"tree-empty\">Nothing here</div>")
+    } else {
+        render_tree_directory_contents(&root, 0)
+    };
 
     format!(
-        "<div class=\"file-tree-shell\"><div class=\"file-tree-header\"><div class=\"file-tree-count\">{} Changes</div></div><label class=\"file-tree-filter\"><input type=\"search\" data-role=\"file-filter\" placeholder=\"Filter files...\" spellcheck=\"false\"></label>{}{}</div>",
-        total_count, unstaged_html, staged_html,
+        "<div class=\"file-tree-shell\"><div class=\"file-tree-header\"><div class=\"file-tree-count\">{}</div></div><label class=\"file-tree-filter\"><input type=\"search\" data-role=\"file-filter\" placeholder=\"Filter files...\" spellcheck=\"false\"></label><div class=\"file-tree-groups\">{}</div></div>",
+        change_label(total_count),
+        tree_html,
     )
 }
 
@@ -474,27 +453,12 @@ fn render_tree_file(file: &TreeFileEntry, depth: usize) -> String {
     )
 }
 
-fn render_tree_stage_section(
-    title: &str,
-    subtitle: &str,
-    stage_class: &str,
-    root: &TreeDirectory,
-    count: usize,
-) -> String {
-    let body = if root.directories.is_empty() && root.files.is_empty() {
-        String::from("<div class=\"tree-empty\">Nothing here</div>")
+fn change_label(count: usize) -> String {
+    if count == 1 {
+        String::from("1 Change")
     } else {
-        render_tree_directory_contents(root, 0)
-    };
-
-    format!(
-        "<section class=\"file-tree-stage\"><div class=\"file-tree-stage-header\"><div class=\"file-tree-stage-copy\"><div class=\"file-tree-stage-title {}\">{}</div><div class=\"file-tree-stage-subtitle\">{}</div></div><div class=\"file-tree-stage-count\">{}</div></div><div class=\"file-tree-groups\">{}</div></section>",
-        stage_class,
-        escape_html(title),
-        escape_html(subtitle),
-        count,
-        body
-    )
+        format!("{count} Changes")
+    }
 }
 
 fn file_name(path: &str) -> String {
@@ -657,18 +621,18 @@ body.tree-open .diff-shell {
   z-index: 30;
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  margin-bottom: 8px;
-  padding: 2px 0 10px;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 2px 0 8px;
   background: linear-gradient(180deg, rgba(15, 16, 17, 0.98) 0%, rgba(15, 16, 17, 0.92) 72%, rgba(15, 16, 17, 0) 100%);
 }
 .toolbar-btn {
-  width: 42px;
-  height: 42px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: rgba(33, 34, 37, 0.96);
-  color: #d9dde3;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  background: rgba(26, 27, 30, 0.9);
+  color: #c6ccd4;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -676,16 +640,16 @@ body.tree-open .diff-shell {
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 .toolbar-btn:hover {
-  background: rgba(48, 49, 54, 0.98);
+  background: rgba(36, 38, 42, 0.98);
 }
 .toolbar-btn.is-active {
-  border-color: rgba(104, 156, 255, 0.36);
-  background: rgba(39, 46, 60, 0.98);
+  border-color: rgba(104, 156, 255, 0.28);
+  background: rgba(33, 38, 48, 0.98);
   color: #9ec6ff;
 }
 .toolbar-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.9;
@@ -694,7 +658,7 @@ body.tree-open .diff-shell {
 }
 .file-tree-panel {
   position: sticky;
-  top: 18px;
+  top: 12px;
   max-height: calc(100vh - 36px);
   overflow: auto;
   opacity: 0;
@@ -708,79 +672,44 @@ body.tree-open .file-tree-panel {
   transform: translateX(0);
 }
 .file-tree-shell {
-  padding: 6px 0 0;
+  padding: 4px 0 0;
 }
 .file-tree-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
-  padding: 0 2px;
+  margin-bottom: 10px;
+  padding: 0;
 }
 .file-tree-count {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
-  color: #cfd4db;
+  color: #c8ced6;
 }
 .file-tree-filter {
   display: block;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 .file-tree-filter input {
   width: 100%;
-  padding: 11px 14px;
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 12px;
-  background: rgba(51, 52, 56, 0.92);
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 6px;
+  background: rgba(24, 25, 27, 0.72);
   color: var(--text);
   font: inherit;
-  font-size: 15px;
+  font-size: 12px;
   line-height: 1.2;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+.file-tree-filter input:focus {
+  outline: none;
+  border-color: rgba(104, 156, 255, 0.18);
+  background: rgba(28, 29, 32, 0.9);
+  box-shadow: none;
 }
 .file-tree-filter input::placeholder {
   color: #a0a5ad;
-}
-.file-tree-stage {
-  margin-bottom: 18px;
-}
-.file-tree-stage-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0 2px 10px;
-}
-.file-tree-stage-copy {
-  min-width: 0;
-}
-.file-tree-stage-title {
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.tree-stage-heading-unstaged {
-  color: #7ee7a7;
-}
-.tree-stage-heading-staged {
-  color: #9ec6ff;
-}
-.file-tree-stage-subtitle {
-  margin-top: 2px;
-  color: #8f96a0;
-  font-size: 11px;
-  font-weight: 600;
-}
-.file-tree-stage-count {
-  flex: none;
-  min-width: 24px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.06);
-  color: #cbd1d9;
-  font-size: 12px;
-  font-weight: 700;
-  text-align: center;
 }
 .file-tree-groups {
   display: block;
@@ -800,11 +729,13 @@ body.tree-open .file-tree-panel {
   --depth: 0;
   position: relative;
   width: 100%;
-  min-height: 40px;
+  min-height: 28px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 12px 7px calc(10px + (var(--depth) * 26px));
+  gap: 7px;
+  margin-bottom: 0;
+  padding: 3px 6px 3px calc(8px + (var(--depth) * 18px));
+  border-radius: 0;
   border: 0;
   background: transparent;
   color: var(--text);
@@ -813,27 +744,39 @@ body.tree-open .file-tree-panel {
 .tree-row::before {
   content: "";
   position: absolute;
-  left: calc(18px + (var(--depth) * 26px));
+  left: calc(13px + (var(--depth) * 18px));
   top: 0;
   bottom: 0;
   width: 1px;
-  background: rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.05);
+}
+.tree-row::after {
+  content: "";
+  position: absolute;
+  left: calc(13px + (var(--depth) * 18px));
+  top: 50%;
+  width: 8px;
+  height: 1px;
+  background: rgba(255,255,255,0.05);
 }
 .tree-row-dir {
   cursor: pointer;
-  color: #c7ccd4;
-  font-weight: 700;
+  color: #aeb5bf;
+  font-weight: 600;
+}
+.tree-row-dir:hover {
+  background: rgba(255,255,255,0.02);
 }
 .tree-file {
   cursor: pointer;
+  transition: background 120ms ease, box-shadow 120ms ease;
 }
-.tree-file:hover,
-.tree-file.is-active {
-  background: rgba(255,255,255,0.05);
+.tree-file:hover {
+  background: rgba(255,255,255,0.025);
 }
 .tree-file.is-active {
-  outline: 1px solid rgba(104, 156, 255, 0.3);
-  outline-offset: -1px;
+  background: rgba(255,255,255,0.035);
+  box-shadow: inset 2px 0 0 rgba(104, 156, 255, 0.75);
 }
 .tree-caret,
 .tree-row-spacer {
@@ -855,14 +798,14 @@ body.tree-open .file-tree-panel {
 .tree-icon {
   position: relative;
   z-index: 1;
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   flex: none;
-  color: #cfd4db;
+  color: #bcc3cc;
 }
 .tree-icon svg {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.8;
@@ -872,7 +815,7 @@ body.tree-open .file-tree-panel {
 .tree-label {
   min-width: 0;
   flex: 1;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -880,10 +823,9 @@ body.tree-open .file-tree-panel {
 }
 .tree-stage-dot {
   flex: none;
-  width: 8px;
-  height: 8px;
+  width: 5px;
+  height: 5px;
   border-radius: 999px;
-  box-shadow: 0 0 0 2px rgba(255,255,255,0.04);
 }
 .tree-stage-unstaged {
   background: #7ee7a7;
@@ -892,85 +834,89 @@ body.tree-open .file-tree-panel {
   background: #9ec6ff;
 }
 .tree-empty {
-  padding: 16px 12px;
-  color: var(--muted);
+  padding: 6px 6px 6px 20px;
+  color: #737b85;
+  font-size: 12px;
 }
 .hero {
-  margin-bottom: 18px;
-  padding: 10px 6px 2px;
+  margin-bottom: 12px;
+  padding: 2px 0 0;
 }
 .hero-label {
-  color: var(--muted);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  display: none;
 }
 .hero h1 {
-  margin: 6px 0 8px;
-  font-size: 26px;
-  line-height: 1.15;
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: #bcc3cc;
 }
 .hero p {
   margin: 0;
-  color: var(--muted);
+  color: #7f8791;
+  font-size: 11px;
   word-break: break-all;
 }
 .hero .error {
   color: #ff9b9b;
 }
 .diff-section {
-  margin-bottom: 18px;
+  margin-bottom: 10px;
 }
 .section-header {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  background: rgba(33, 34, 37, 0.96);
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  margin-bottom: 6px;
+  padding: 0 0 4px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 .section-title {
-  font-size: 16px;
+  font-size: 11px;
   font-weight: 700;
+  color: #aeb5bf;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 .section-count {
-  min-width: 28px;
-  padding: 2px 8px;
-  border-radius: 999px;
+  min-width: 0;
+  padding: 0;
   text-align: center;
-  background: rgba(255,255,255,0.08);
-  color: #d9dde3;
-  font-size: 13px;
+  background: transparent;
+  color: #6f7781;
+  font-size: 11px;
+  font-weight: 700;
 }
 .empty-state, .file-empty {
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: rgba(24, 25, 27, 0.88);
+  padding: 6px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--muted);
+  font-size: 12px;
 }
 .file-card {
-  margin-bottom: 14px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: rgba(24, 25, 27, 0.96);
+  margin-bottom: 8px;
+  border: 1px solid rgba(255,255,255,0.04);
+  border-radius: 4px;
+  background: rgba(21, 22, 24, 0.6);
   overflow: hidden;
 }
 .file-card.is-active {
-  border-color: rgba(104, 156, 255, 0.38);
-  box-shadow: 0 0 0 1px rgba(104, 156, 255, 0.18);
+  border-color: rgba(104, 156, 255, 0.12);
 }
 .file-card > summary {
   list-style: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 16px 20px;
+  gap: 10px;
+  padding: 8px 10px;
   cursor: pointer;
-  background: rgba(30, 31, 34, 0.95);
+  background: rgba(24, 25, 27, 0.55);
 }
 .file-card > summary,
 .file-card > summary * {
@@ -986,40 +932,49 @@ body.tree-open .file-tree-panel {
 .file-main {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
 }
 .file-path {
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 700;
   word-break: break-word;
 }
+.file-stage-meta {
+  flex: none;
+  color: #6f7781;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 .file-stats {
   display: inline-flex;
-  gap: 10px;
-  font-size: 14px;
+  gap: 6px;
+  font-size: 11px;
   white-space: nowrap;
 }
 .added { color: #42d17f; }
 .removed { color: #ff5f61; }
 .file-body {
-  padding: 0 10px 10px;
+  padding: 0 6px 6px;
 }
 .hunk {
-  margin-top: 10px;
-  border: 1px solid rgba(55, 57, 62, 0.85);
-  border-radius: 12px;
-  overflow: hidden;
+  margin-top: 6px;
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 4px;
+  overflow: auto;
   background: var(--hunk-bg);
 }
 .hunk-header {
-  padding: 8px 14px;
-  background: rgba(29, 30, 34, 0.98);
+  padding: 4px 8px;
+  background: rgba(29, 30, 34, 0.8);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 10px;
 }
 .diff-grid {
   display: block;
+  min-width: max-content;
 }
 .row {
   display: grid;
@@ -1057,8 +1012,9 @@ body.tree-open .file-tree-panel {
   border-left: 4px solid var(--red-edge);
 }
 .row .code {
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .tok-comment { color: #7d8590; font-style: italic; }
 .tok-string { color: #f6c177; }

@@ -809,6 +809,18 @@ impl RuntimeSession {
         true
     }
 
+    pub(crate) fn close_diff_view(&mut self) -> bool {
+        let Some(diff_pane_id) = self.diff_pane_id() else {
+            return false;
+        };
+        let active_terminal_id = self.active_terminal_pane_id();
+        let removed = self.remove_pane(&diff_pane_id);
+        if removed && let Some(active_terminal_id) = active_terminal_id {
+            self.active_pane_id = active_terminal_id;
+        }
+        removed
+    }
+
     pub(crate) fn drain_diff_actions(&mut self) -> Vec<RuntimeDiffAction> {
         self.panes
             .iter_mut()

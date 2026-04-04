@@ -1321,6 +1321,17 @@ void rust_ghostty_host_view_focus_search(void *host_ns_view) {
   [controller focusField];
 }
 
+void rust_ghostty_host_view_focus_terminal(void *host_ns_view) {
+  if (host_ns_view == NULL) {
+    return;
+  }
+
+  NSView *host = (NSView *)host_ns_view;
+  RustGhosttySearchOverlayController *controller =
+      rust_ghostty_search_overlay_controller(host, false);
+  [controller restoreTerminalFocus];
+}
+
 void rust_ghostty_host_view_free(void *host_ns_view) {
   if (host_ns_view == NULL) {
     return;

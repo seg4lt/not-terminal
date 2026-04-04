@@ -4,6 +4,7 @@ use crate::webview::WebView;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DiffPaneAction {
     ToggleSplitZoom,
+    ToggleDiffView,
 }
 
 pub(crate) struct DiffPaneRuntime {
@@ -32,6 +33,7 @@ impl DiffPaneRuntime {
         let action = self.webview.take_action()?;
         match action.as_str() {
             "toggle-split-zoom" => Some(DiffPaneAction::ToggleSplitZoom),
+            "toggle-diff-view" => Some(DiffPaneAction::ToggleDiffView),
             _ => None,
         }
     }

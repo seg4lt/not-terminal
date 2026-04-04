@@ -300,6 +300,7 @@ mod macos {
         fn rust_ghostty_host_view_set_hidden(host_ns_view: *mut c_void, hidden: bool);
         fn rust_ghostty_host_view_set_search_active(host_ns_view: *mut c_void, active: bool);
         fn rust_ghostty_host_view_focus_search(host_ns_view: *mut c_void);
+        fn rust_ghostty_host_view_focus_terminal(host_ns_view: *mut c_void);
         fn rust_ghostty_host_view_set_split_badge(
             host_ns_view: *mut c_void,
             visible: bool,
@@ -771,6 +772,16 @@ mod macos {
 
         unsafe {
             rust_ghostty_host_view_focus_search(host_ns_view as *mut c_void);
+        }
+    }
+
+    pub fn host_view_focus_terminal(host_ns_view: usize) {
+        if host_ns_view == 0 {
+            return;
+        }
+
+        unsafe {
+            rust_ghostty_host_view_focus_terminal(host_ns_view as *mut c_void);
         }
     }
 
@@ -1338,10 +1349,11 @@ mod macos {
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    GhosttyEmbed, disable_system_hide_shortcuts, host_view_focus_search, host_view_free,
-    host_view_new, host_view_set_frame, host_view_set_hidden, host_view_set_search_active,
-    host_view_set_split_badge, ns_view_ptr, parent_view_set_attention_badge,
-    register_focus_toggle_hotkey, take_pending_attention_badge_click,
+    GhosttyEmbed, disable_system_hide_shortcuts, host_view_focus_search, host_view_focus_terminal,
+    host_view_free, host_view_new, host_view_set_frame, host_view_set_hidden,
+    host_view_set_search_active, host_view_set_split_badge, ns_view_ptr,
+    parent_view_set_attention_badge, register_focus_toggle_hotkey,
+    take_pending_attention_badge_click,
 };
 
 #[cfg(not(target_os = "macos"))]
@@ -1406,6 +1418,8 @@ pub fn host_view_set_search_active(_host_ns_view: usize, _active: bool) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn host_view_focus_search(_host_ns_view: usize) {}
+#[cfg(not(target_os = "macos"))]
+pub fn host_view_focus_terminal(_host_ns_view: usize) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn host_view_set_split_badge(_host_ns_view: usize, _visible: bool, _active: bool) {}

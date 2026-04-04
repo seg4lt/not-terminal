@@ -11,8 +11,8 @@ use crate::app::runtime::{
     PaneRuntime, RuntimeDiffAction, RuntimeSession, SplitAxis, SplitDivider,
 };
 use crate::ghostty_embed::{
-    GhosttyEmbed, GhosttyProgressReportState, GhosttyRuntimeAction, host_view_free, host_view_new,
-    ns_view_ptr, parent_view_set_attention_badge,
+    GhosttyEmbed, GhosttyProgressReportState, GhosttyRuntimeAction, host_view_focus_terminal,
+    host_view_free, host_view_new, ns_view_ptr, parent_view_set_attention_badge,
 };
 use crate::webview::WebView;
 use iced::{
@@ -2341,6 +2341,19 @@ impl App {
                         .runtimes
                         .get_mut(&terminal_id)
                         .is_some_and(|runtime| runtime.toggle_split_zoom_for_pane(&pane_id)),
+                    crate::app::diff_runtime::DiffPaneAction::ToggleDiffView => {
+                        let changed = self
+                            .runtimes
+                            .get_mut(&terminal_id)
+                            .is_some_and(RuntimeSession::close_diff_view);
+                        if changed {
+                            self.clear_diff_refresh_state(&terminal_id);
+                            if let Some(host_view) = self.active_terminal_host_view() {
+                                host_view_focus_terminal(host_view);
+                            }
+                        }
+                        changed
+                    }
                 };
                 changed = changed || action_changed;
             }

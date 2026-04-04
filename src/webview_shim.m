@@ -22,6 +22,7 @@ typedef struct rust_webview_s {
 @end
 
 @interface KeyboardCapableWKWebView : WKWebView
+@property(nonatomic, assign) rust_webview_t *rustWrapper;
 @end
 @implementation KeyboardCapableWKWebView
 - (BOOL)acceptsFirstResponder {
@@ -29,6 +30,30 @@ typedef struct rust_webview_s {
 }
 - (BOOL)becomeFirstResponder {
     return [super becomeFirstResponder];
+}
+- (BOOL)performKeyEquivalent:(NSEvent *)event {
+    if (event == nil || self.rustWrapper == NULL) {
+        return [super performKeyEquivalent:event];
+    }
+
+    NSEventModifierFlags modifiers =
+        [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+    BOOL command = (modifiers & NSEventModifierFlagCommand) != 0;
+    BOOL shift = (modifiers & NSEventModifierFlagShift) != 0;
+    BOOL control = (modifiers & NSEventModifierFlagControl) != 0;
+    BOOL option = (modifiers & NSEventModifierFlagOption) != 0;
+    NSString *characters = [[event charactersIgnoringModifiers] lowercaseString];
+
+    if (command && shift && !control && !option && [characters isEqualToString:@"d"]) {
+        if (self.rustWrapper->pending_action != NULL) {
+            free(self.rustWrapper->pending_action);
+            self.rustWrapper->pending_action = NULL;
+        }
+        self.rustWrapper->pending_action = strdup("toggle-diff-view");
+        return YES;
+    }
+
+    return [super performKeyEquivalent:event];
 }
 @end
 
@@ -129,6 +154,7 @@ void *webview_new(void *parent_ns_view) {
 
     [webview setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     [webview setNavigationDelegate:nil];
+    [(KeyboardCapableWKWebView *)webview setRustWrapper:wrapper];
     [container addSubview:webview];
 
     wrapper->webview = webview;
