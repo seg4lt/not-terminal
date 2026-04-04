@@ -1,5 +1,5 @@
 use crate::app::project_search::{
-    ProjectSearchFile, ProjectSearchPreview, ProjectSearchResponse, empty_response,
+    ProjectSearchFile, ProjectSearchPreview, ProjectSearchRequest, ProjectSearchResponse,
 };
 use crate::app::project_search_view;
 use crate::webview::WebView;
@@ -9,7 +9,7 @@ use serde::Deserialize;
 pub(crate) enum SearchPaneAction {
     ToggleSplitZoom,
     ToggleProjectSearchView,
-    QueryChanged(String),
+    QueryChanged(ProjectSearchRequest),
     SelectFile(String),
     OpenResult {
         path: String,
@@ -25,6 +25,9 @@ enum SearchPaneActionEnvelope {
     ToggleProjectSearchView,
     QueryChanged {
         query: String,
+        include: Option<String>,
+        exclude: Option<String>,
+        include_gitignored: Option<bool>,
     },
     SelectFile {
         path: String,
@@ -42,7 +45,7 @@ pub(crate) struct SearchPaneRuntime {
     pub(crate) worktree_path: String,
     pub(crate) last_frame: Option<(f64, f64, f64, f64)>,
     pub(crate) last_hidden: Option<bool>,
-    pub(crate) current_query: String,
+    pub(crate) current_request: ProjectSearchRequest,
     pub(crate) request_id: u64,
     pub(crate) preview_request_id: u64,
     pub(crate) selected_preview_path: Option<String>,
@@ -60,7 +63,7 @@ impl SearchPaneRuntime {
             worktree_path,
             last_frame: None,
             last_hidden: None,
-            current_query: String::new(),
+            current_request: ProjectSearchRequest::default(),
             request_id: 0,
             preview_request_id: 0,
             selected_preview_path: None,
@@ -83,9 +86,19 @@ impl SearchPaneRuntime {
             SearchPaneActionEnvelope::ToggleProjectSearchView => {
                 Some(SearchPaneAction::ToggleProjectSearchView)
             }
-            SearchPaneActionEnvelope::QueryChanged { query } => {
-                Some(SearchPaneAction::QueryChanged(query))
-            }
+            SearchPaneActionEnvelope::QueryChanged {
+                query,
+                include,
+                exclude,
+                include_gitignored,
+            } => Some(SearchPaneAction::QueryChanged(ProjectSearchRequest {
+                query,
+                options: crate::app::project_search::ProjectSearchOptions {
+                    include: include.unwrap_or_default(),
+                    exclude: exclude.unwrap_or_default(),
+                    include_gitignored: include_gitignored.unwrap_or(false),
+                },
+            })),
             SearchPaneActionEnvelope::SelectFile { path } => {
                 Some(SearchPaneAction::SelectFile(path))
             }
@@ -95,8 +108,8 @@ impl SearchPaneRuntime {
         }
     }
 
-    pub(crate) fn begin_query(&mut self, query: String) -> u64 {
-        self.current_query = query;
+    pub(crate) fn begin_query(&mut self, request: ProjectSearchRequest) -> u64 {
+        self.current_request = request;
         self.request_id = self.request_id.wrapping_add(1);
         self.preview_request_id = self.preview_request_id.wrapping_add(1);
         self.selected_preview_path = None;
@@ -118,8 +131,12 @@ impl SearchPaneRuntime {
         Some((self.preview_request_id, matches))
     }
 
-    pub(crate) fn matches_query_response(&self, request_id: u64, query: &str) -> bool {
-        self.request_id == request_id && self.current_query == query
+    pub(crate) fn matches_query_response(
+        &self,
+        request_id: u64,
+        request: &ProjectSearchRequest,
+    ) -> bool {
+        self.request_id == request_id && self.current_request == *request
     }
 
     pub(crate) fn matches_preview_response(&self, request_id: u64, path: &str) -> bool {
@@ -172,16 +189,6 @@ impl SearchPaneRuntime {
             self.clear_preview();
         }
     }
-
-    pub(crate) fn clear_results(&mut self, query: &str) {
-        self.files.clear();
-        self.invoke_json_function(
-            "window.__NOT_TERMINAL_SEARCH_SET_RESULTS__",
-            &empty_response(query),
-        );
-        self.clear_preview();
-    }
-
     pub(crate) fn set_preview(&self, preview: &ProjectSearchPreview) {
         self.invoke_json_function("window.__NOT_TERMINAL_SEARCH_SET_PREVIEW__", preview);
     }

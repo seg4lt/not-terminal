@@ -14,10 +14,40 @@ root.innerHTML = `
       </div>
       <div class="toolbar-path" data-role="scope">${escapeHtml(worktreePath)}</div>
     </div>
-    <label class="toolbar-search">
-      <span class="toolbar-search-icon">${iconSearch()}</span>
-      <input id="project-search-input" type="search" placeholder="Search the project (regex)" spellcheck="false" autocomplete="off" data-role="search-input">
-    </label>
+    <div class="toolbar-search-stack">
+      <div class="toolbar-search-row">
+        <label class="toolbar-search">
+          <span class="toolbar-search-icon">${iconSearch()}</span>
+          <input id="project-search-input" type="search" placeholder="Search the project (regex)" spellcheck="false" autocomplete="off" data-role="search-input">
+        </label>
+        <button class="toolbar-btn toolbar-filter-btn" type="button" data-action="toggle-search-options" title="Search filters" aria-label="Search filters" aria-expanded="false">
+          ${iconFunnel()}
+        </button>
+      </div>
+      <div class="toolbar-search-options" data-role="search-options" hidden>
+        <input
+          class="toolbar-search-option-input"
+          type="text"
+          placeholder="Include: crates/**/*.toml"
+          spellcheck="false"
+          autocomplete="off"
+          data-role="include-input"
+          aria-label="Include files or folders"
+        >
+        <input
+          class="toolbar-search-option-input"
+          type="text"
+          placeholder="Exclude: vendor/*, *.lock"
+          spellcheck="false"
+          autocomplete="off"
+          data-role="exclude-input"
+          aria-label="Exclude files or folders"
+        >
+        <button class="toolbar-chip" type="button" data-action="toggle-gitignored" aria-pressed="false">
+          Include gitignored files
+        </button>
+      </div>
+    </div>
     <div class="toolbar-actions">
       <button class="toolbar-btn" type="button" data-action="prev-match" title="Previous match" aria-label="Previous match">${iconChevronUp()}</button>
       <button class="toolbar-btn" type="button" data-action="next-match" title="Next match" aria-label="Next match">${iconChevronDown()}</button>
@@ -62,6 +92,9 @@ const handler =
   window.webkit.messageHandlers.notTerminalDiff;
 
 const searchInput = root.querySelector("[data-role='search-input']");
+const searchOptionsPanel = root.querySelector("[data-role='search-options']");
+const includeInput = root.querySelector("[data-role='include-input']");
+const excludeInput = root.querySelector("[data-role='exclude-input']");
 const countsPrimary = root.querySelector("[data-role='counts-primary']");
 const countsSecondary = root.querySelector("[data-role='counts-secondary']");
 const resultsMeta = root.querySelector("[data-role='results-meta']");
@@ -89,6 +122,12 @@ const state = {
   flatMatches: [],
   activeGlobalMatchIndex: 0,
   queryDebounce: 0,
+  optionsOpen: false,
+  searchOptions: {
+    include: "",
+    exclude: "",
+    includeGitignored: false,
+  },
 };
 
 const TREE_ROW_HEIGHT = 28;
@@ -1083,6 +1122,31 @@ function setLoading(payload) {
   renderPreview();
 }
 
+function currentSearchRequest() {
+  return {
+    type: "query-changed",
+    query: state.query,
+    include: state.searchOptions.include,
+    exclude: state.searchOptions.exclude,
+    include_gitignored: state.searchOptions.includeGitignored,
+  };
+}
+
+function resetSearchCaches() {
+  state.previewCache.clear();
+  state.previewRenderCache.clear();
+  state.previewExpandState.clear();
+}
+
+function scheduleSearchRequest() {
+  const payload = currentSearchRequest();
+  clearTimeout(state.queryDebounce);
+  state.queryDebounce = window.setTimeout(() => {
+    postAction(payload);
+    setLoading({ query: payload.query });
+  }, 180);
+}
+
 function handleTreeClick(event) {
   const row = event.target.closest(".tree-row");
   if (!row) return;
@@ -1133,14 +1197,55 @@ function handleTreeDoubleClick(event) {
 function handleSearchInput() {
   const value = searchInput.value;
   state.query = value;
-  state.previewCache.clear();
-  state.previewRenderCache.clear();
-  state.previewExpandState.clear();
-  clearTimeout(state.queryDebounce);
-  state.queryDebounce = window.setTimeout(() => {
-    postAction({ type: "query-changed", query: value });
-    setLoading({ query: value });
-  }, 180);
+  resetSearchCaches();
+  scheduleSearchRequest();
+}
+
+function handleSearchOptionInput(event) {
+  if (!(event.target instanceof HTMLInputElement)) return;
+
+  if (event.target === includeInput) {
+    state.searchOptions.include = includeInput.value;
+  } else if (event.target === excludeInput) {
+    state.searchOptions.exclude = excludeInput.value;
+  }
+
+  resetSearchCaches();
+  scheduleSearchRequest();
+}
+
+function renderSearchOptions() {
+  const toggleButton = root.querySelector("[data-action='toggle-search-options']");
+  const gitignoredToggle = root.querySelector("[data-action='toggle-gitignored']");
+  if (!toggleButton || !gitignoredToggle) return;
+
+  searchOptionsPanel.hidden = !state.optionsOpen;
+  toggleButton.classList.toggle("is-active", state.optionsOpen);
+  toggleButton.setAttribute("aria-expanded", state.optionsOpen ? "true" : "false");
+  includeInput.value = state.searchOptions.include;
+  excludeInput.value = state.searchOptions.exclude;
+  gitignoredToggle.classList.toggle("is-active", state.searchOptions.includeGitignored);
+  gitignoredToggle.setAttribute(
+    "aria-pressed",
+    state.searchOptions.includeGitignored ? "true" : "false",
+  );
+}
+
+function toggleSearchOptions() {
+  state.optionsOpen = !state.optionsOpen;
+  renderSearchOptions();
+  if (state.optionsOpen) {
+    beginTextInput(includeInput);
+  } else if (document.activeElement === includeInput || document.activeElement === excludeInput) {
+    beginTextInput(searchInput);
+  }
+}
+
+function toggleGitignoredFiles() {
+  state.searchOptions.includeGitignored = !state.searchOptions.includeGitignored;
+  renderSearchOptions();
+  resetSearchCaches();
+  scheduleSearchRequest();
 }
 
 function getPreviewLineElement(event) {
@@ -1207,6 +1312,15 @@ function bindTextInputFocus(input) {
   });
 }
 
+function bindSelectAllShortcut(input) {
+  input.addEventListener("keydown", (event) => {
+    if (event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      input.select();
+    }
+  });
+}
+
 treeScroll.addEventListener("scroll", queueTreeRender);
 treeLayer.addEventListener("click", handleTreeClick);
 treeLayer.addEventListener("dblclick", handleTreeDoubleClick);
@@ -1214,19 +1328,26 @@ previewScroll.addEventListener("scroll", queuePreviewRender);
 previewSurface.addEventListener("click", handlePreviewClick);
 previewSurface.addEventListener("dblclick", handlePreviewDoubleClick);
 searchInput.addEventListener("input", handleSearchInput);
-searchInput.addEventListener("keydown", (event) => {
-  if (event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === "a") {
-    event.preventDefault();
-    searchInput.select();
-  }
-});
+includeInput.addEventListener("input", handleSearchOptionInput);
+excludeInput.addEventListener("input", handleSearchOptionInput);
 bindTextInputFocus(searchInput);
+bindTextInputFocus(includeInput);
+bindTextInputFocus(excludeInput);
+bindSelectAllShortcut(searchInput);
+bindSelectAllShortcut(includeInput);
+bindSelectAllShortcut(excludeInput);
 document.addEventListener("selectionchange", syncPreviewSelection);
 window.addEventListener("resize", () => {
   queueTreeRender();
   requestAnimationFrame(scrollPreviewToActiveMatch);
 });
 
+root.querySelector("[data-action='toggle-search-options']").addEventListener("click", () =>
+  toggleSearchOptions(),
+);
+root.querySelector("[data-action='toggle-gitignored']").addEventListener("click", () =>
+  toggleGitignoredFiles(),
+);
 root.querySelector("[data-action='prev-match']").addEventListener("click", () => moveMatch(-1));
 root.querySelector("[data-action='next-match']").addEventListener("click", () => moveMatch(1));
 root.querySelector("[data-action='toggle-fullscreen']").addEventListener("click", () =>
@@ -1241,6 +1362,7 @@ window.__NOT_TERMINAL_SEARCH_SET_PREVIEW__ = setPreview;
 window.__NOT_TERMINAL_SEARCH_SET_LOADING__ = setLoading;
 
 summarizeCounts();
+renderSearchOptions();
 queueTreeRender();
 renderPreview();
 
@@ -1291,7 +1413,7 @@ function injectStyle() {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(120px, 520px) auto;
       gap: 12px;
-      align-items: center;
+      align-items: start;
       padding: 10px 14px;
       border-bottom: 1px solid var(--border);
       background: rgba(12, 13, 16, 0.96);
@@ -1325,6 +1447,18 @@ function injectStyle() {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .toolbar-search-stack {
+      min-width: 0;
+      display: grid;
+      gap: 8px;
+    }
+    .toolbar-search-row {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
     }
     .toolbar-search {
       display: flex;
@@ -1371,6 +1505,52 @@ function injectStyle() {
       align-items: center;
       justify-content: center;
       flex: 0 0 auto;
+    }
+    .toolbar-filter-btn.is-active {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .toolbar-search-options {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .toolbar-search-option-input {
+      min-width: 0;
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--border-soft);
+      border-radius: 9px;
+      background: rgba(255,255,255,0.02);
+      color: var(--text);
+      outline: none;
+    }
+    .toolbar-search-option-input:focus {
+      border-color: rgba(123, 179, 255, 0.35);
+      background: rgba(123, 179, 255, 0.07);
+    }
+    .toolbar-search-option-input::placeholder {
+      color: var(--muted);
+    }
+    .toolbar-chip {
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.02);
+      color: var(--muted-strong);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .toolbar-chip:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.04);
+    }
+    .toolbar-chip.is-active {
+      color: var(--accent);
+      border-color: rgba(123, 179, 255, 0.25);
+      background: var(--accent-soft);
     }
     .toolbar-actions {
       display: flex;
@@ -1532,12 +1712,27 @@ function injectStyle() {
       place-items: center;
       color: var(--muted);
     }
+    @media (max-width: 1100px) {
+      .search-toolbar {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .toolbar-actions {
+        justify-content: flex-end;
+      }
+      .toolbar-search-options {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
   `;
   document.head.appendChild(style);
 }
 
 function iconSearch() {
   return `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>`;
+}
+
+function iconFunnel() {
+  return `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11l-4.25 5v3.25l-2.5 1.75V8.5z"></path></svg>`;
 }
 
 function iconChevronUp() {

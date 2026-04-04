@@ -8,7 +8,7 @@ use crate::app::model::{
     next_project_name, next_terminal_name,
 };
 use crate::app::persistence;
-use crate::app::project_search::{ProjectSearchPreview, SearchStream};
+use crate::app::project_search::{ProjectSearchPreview, ProjectSearchRequest, SearchStream};
 use crate::app::runtime::{
     PaneRuntime, RuntimeDiffAction, RuntimeSearchAction, RuntimeSession, SplitAxis, SplitDivider,
 };
@@ -323,7 +323,7 @@ pub(crate) struct ActiveTerminalContext {
 pub(crate) struct ProjectSearchJob {
     pub(crate) worktree_path: String,
     pub(crate) request_id: u64,
-    pub(crate) query: String,
+    pub(crate) request: ProjectSearchRequest,
     pub(crate) stream: SearchStream,
     pub(crate) pending_progress: Option<crate::app::project_search::ProjectSearchResponse>,
     pub(crate) pending_progress_deadline: Option<Instant>,

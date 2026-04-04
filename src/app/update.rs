@@ -1727,27 +1727,24 @@ fn process_search_pane_actions(app: &mut App) -> (bool, Task<Message>) {
                     && let Some(worktree_path) = runtime.search_worktree_path()
                     && let Some(search_pane) = runtime.search_pane_mut_for_worktree(&worktree_path)
                 {
-                    let trimmed = query.trim().to_string();
-                    let request_id = search_pane.begin_query(trimmed.clone());
-                    search_pane.set_loading(&trimmed);
-                    if trimmed.is_empty() {
-                        search_pane.clear_results(&trimmed);
-                    } else {
-                        app.project_search_jobs.insert(
-                            terminal_id.clone(),
-                            ProjectSearchJob {
-                                worktree_path: worktree_path.clone(),
-                                request_id,
-                                query: trimmed.clone(),
-                                stream: project_search::start_search_stream(
-                                    worktree_path.clone(),
-                                    trimmed,
-                                ),
-                                pending_progress: None,
-                                pending_progress_deadline: None,
-                            },
-                        );
-                    }
+                    let mut request = query;
+                    request.query = request.query.trim().to_string();
+                    let request_id = search_pane.begin_query(request.clone());
+                    search_pane.set_loading(&request.query);
+                    app.project_search_jobs.insert(
+                        terminal_id.clone(),
+                        ProjectSearchJob {
+                            worktree_path: worktree_path.clone(),
+                            request_id,
+                            stream: project_search::start_search_stream(
+                                worktree_path.clone(),
+                                request.clone(),
+                            ),
+                            request,
+                            pending_progress: None,
+                            pending_progress_deadline: None,
+                        },
+                    );
                 }
                 false
             }
@@ -1849,7 +1846,7 @@ fn process_project_search_jobs(app: &mut App) -> bool {
     let now = Instant::now();
 
     for terminal_id in terminal_ids {
-        let (request_id, worktree_path, query, apply_progress_now) = {
+        let (request_id, worktree_path, request, apply_progress_now) = {
             let Some(job) = app.project_search_jobs.get_mut(&terminal_id) else {
                 continue;
             };
@@ -1887,7 +1884,7 @@ fn process_project_search_jobs(app: &mut App) -> bool {
             (
                 job.request_id,
                 job.worktree_path.clone(),
-                job.query.clone(),
+                job.request.clone(),
                 apply_progress_now,
             )
         };
@@ -1915,7 +1912,7 @@ fn process_project_search_jobs(app: &mut App) -> bool {
             finished.push(terminal_id);
             continue;
         };
-        if !search_pane.matches_query_response(request_id, &query) {
+        if !search_pane.matches_query_response(request_id, &request) {
             finished.push(terminal_id);
             continue;
         }
@@ -1929,7 +1926,7 @@ fn process_project_search_jobs(app: &mut App) -> bool {
                 match result {
                     Ok(results) => search_pane.set_results(&results),
                     Err(error) => {
-                        search_pane.set_error(&query, &error);
+                        search_pane.set_error(&request.query, &error);
                         app.status = format!("Project search failed: {error}");
                     }
                 }

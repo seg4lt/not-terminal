@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -41,6 +41,19 @@ pub(crate) struct ProjectSearchResponse {
     pub(crate) files: Vec<ProjectSearchFile>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ProjectSearchOptions {
+    pub(crate) include: String,
+    pub(crate) exclude: String,
+    pub(crate) include_gitignored: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ProjectSearchRequest {
+    pub(crate) query: String,
+    pub(crate) options: ProjectSearchOptions,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ProjectSearchPreviewDiff {
     pub(crate) old_contents: String,
@@ -74,24 +87,17 @@ pub(crate) struct SearchStream {
     child: Arc<Mutex<Option<Child>>>,
 }
 
-pub(crate) fn empty_response(query: &str) -> ProjectSearchResponse {
-    ProjectSearchResponse {
-        query: query.to_string(),
-        total_files: 0,
-        total_matches: 0,
-        truncated: false,
-        files: Vec::new(),
-    }
-}
-
 #[allow(dead_code)]
-pub(crate) fn search(worktree_path: &str, query: &str) -> Result<ProjectSearchResponse, String> {
-    let trimmed = query.trim();
+pub(crate) fn search(
+    worktree_path: &str,
+    request: &ProjectSearchRequest,
+) -> Result<ProjectSearchResponse, String> {
+    let trimmed = request.query.trim();
     if trimmed.is_empty() {
-        return browse_files(worktree_path);
+        return browse_files(worktree_path, &request.options);
     }
 
-    let mut child = rg_search_command(worktree_path, trimmed)
+    let mut child = rg_search_command(worktree_path, trimmed, &request.options)
         .spawn()
         .map_err(|error| format!("failed to run rg: {error}"))?;
 
@@ -152,7 +158,10 @@ pub(crate) fn search(worktree_path: &str, query: &str) -> Result<ProjectSearchRe
     })
 }
 
-pub(crate) fn start_search_stream(worktree_path: String, query: String) -> SearchStream {
+pub(crate) fn start_search_stream(
+    worktree_path: String,
+    request: ProjectSearchRequest,
+) -> SearchStream {
     let (tx, rx) = mpsc::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
     let child = Arc::new(Mutex::new(None));
@@ -160,13 +169,17 @@ pub(crate) fn start_search_stream(worktree_path: String, query: String) -> Searc
     let worker_child = Arc::clone(&child);
 
     thread::spawn(move || {
-        let trimmed = query.trim().to_string();
+        let trimmed = request.query.trim().to_string();
         if trimmed.is_empty() {
-            let _ = tx.send(SearchWorkerMessage::Complete(browse_files(&worktree_path)));
+            let _ = tx.send(SearchWorkerMessage::Complete(browse_files(
+                &worktree_path,
+                &request.options,
+            )));
             return;
         }
 
-        let mut child = match rg_search_command(&worktree_path, &trimmed).spawn() {
+        let mut child = match rg_search_command(&worktree_path, &trimmed, &request.options).spawn()
+        {
             Ok(child) => child,
             Err(error) => {
                 let _ = tx.send(SearchWorkerMessage::Complete(Err(format!(
@@ -277,10 +290,19 @@ pub(crate) fn start_search_stream(worktree_path: String, query: String) -> Searc
     }
 }
 
-fn browse_files(worktree_path: &str) -> Result<ProjectSearchResponse, String> {
-    let output = Command::new("rg")
-        .current_dir(worktree_path)
-        .args(["--files", "--hidden", "--glob", "!.git"])
+fn browse_files(
+    worktree_path: &str,
+    options: &ProjectSearchOptions,
+) -> Result<ProjectSearchResponse, String> {
+    let mut command = Command::new("rg");
+    command.current_dir(worktree_path);
+    command.args(["--files", "--hidden"]);
+    if options.include_gitignored {
+        command.arg("--no-ignore");
+    }
+    command.args(["--glob", "!.git"]);
+    append_glob_args(&mut command, options);
+    let output = command
         .output()
         .map_err(|error| format!("failed to list files: {error}"))?;
 
@@ -448,19 +470,16 @@ fn parse_rg_json_line(line: &str) -> Option<(String, ProjectSearchMatch)> {
     ))
 }
 
-fn rg_search_command(worktree_path: &str, query: &str) -> Command {
+fn rg_search_command(worktree_path: &str, query: &str, options: &ProjectSearchOptions) -> Command {
     let mut command = Command::new("rg");
-    command.current_dir(worktree_path).args([
-        "--json",
-        "--line-number",
-        "--hidden",
-        "--glob",
-        "!.git",
-        "--engine",
-        "auto",
-        query,
-        ".",
-    ]);
+    command.current_dir(worktree_path);
+    command.args(["--json", "--line-number", "--hidden"]);
+    command.args(["--glob", "!.git"]);
+    if options.include_gitignored {
+        command.arg("--no-ignore");
+    }
+    append_glob_args(&mut command, options);
+    command.args(["--engine", "auto", query, "."]);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     command
 }
@@ -495,4 +514,46 @@ fn kill_stream_child(child: &Arc<Mutex<Option<Child>>>) {
     {
         let _ = child.kill();
     }
+}
+
+fn append_glob_args(command: &mut Command, options: &ProjectSearchOptions) {
+    for pattern in parse_glob_list(&options.include) {
+        command.arg("--glob").arg(pattern);
+    }
+    for pattern in parse_glob_list(&options.exclude) {
+        command.arg("--glob").arg(format!("!{pattern}"));
+    }
+}
+
+fn parse_glob_list(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_glob_pattern)
+        .collect()
+}
+
+fn normalize_glob_pattern(pattern: &str) -> String {
+    if pattern.contains('*')
+        || pattern.contains('?')
+        || pattern.contains('[')
+        || pattern.contains('{')
+    {
+        return pattern.to_string();
+    }
+
+    if pattern.ends_with('/') {
+        return format!("{pattern}**");
+    }
+
+    if pattern.contains('/') {
+        return format!("{pattern}/**");
+    }
+
+    if !pattern.contains('.') {
+        return format!("**/{pattern}/**");
+    }
+
+    pattern.to_string()
 }
