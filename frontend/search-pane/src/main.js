@@ -23,6 +23,9 @@ root.innerHTML = `
         <button class="toolbar-btn toolbar-filter-btn" type="button" data-action="toggle-search-options" title="Search filters" aria-label="Search filters" aria-expanded="false">
           ${iconFunnel()}
         </button>
+        <button class="toolbar-btn toolbar-gitignore-btn" type="button" data-action="toggle-gitignored" title="Include gitignored files" aria-label="Include gitignored files" aria-pressed="false">
+          ${iconGitignore()}
+        </button>
       </div>
       <div class="toolbar-search-options" data-role="search-options" hidden>
         <input
@@ -43,9 +46,6 @@ root.innerHTML = `
           data-role="exclude-input"
           aria-label="Exclude files or folders"
         >
-        <button class="toolbar-chip" type="button" data-action="toggle-gitignored" aria-pressed="false">
-          Include gitignored files
-        </button>
       </div>
     </div>
     <div class="toolbar-actions">
@@ -1456,7 +1456,7 @@ function injectStyle() {
     .toolbar-search-row {
       min-width: 0;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       gap: 8px;
       align-items: center;
     }
@@ -1510,11 +1510,18 @@ function injectStyle() {
       color: var(--accent);
       background: var(--accent-soft);
     }
+    .toolbar-gitignore-btn.is-active {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
     .toolbar-search-options {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 8px;
       align-items: center;
+    }
+    .toolbar-search-options[hidden] {
+      display: none;
     }
     .toolbar-search-option-input {
       min-width: 0;
@@ -1761,4 +1768,8 @@ function iconFullscreen() {
 
 function iconClose() {
   return `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8"></path><path d="M12 4l-8 8"></path></svg>`;
+}
+
+function iconGitignore() {
+  return `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1"></circle><circle cx="8" cy="8" r="2" fill="currentColor"></circle></svg>`;
 }
