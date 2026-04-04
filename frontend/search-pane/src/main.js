@@ -590,6 +590,7 @@ function previewShellStyles() {
     .preview-gap-main,
     .preview-spacer-main {
       min-width: 0;
+      white-space: pre;
     }
     .preview-gap-gutter,
     .preview-gap-main {
