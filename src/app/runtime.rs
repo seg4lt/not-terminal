@@ -630,6 +630,30 @@ impl RuntimeSession {
         pane.update_html(html)
     }
 
+    pub(crate) fn increase_diff_font_size_for_pane(&mut self, pane_id: &str) -> bool {
+        let Some(pane) = self.panes.get_mut(pane_id).and_then(SessionPane::diff_mut) else {
+            return false;
+        };
+        pane.increase_font_size();
+        true
+    }
+
+    pub(crate) fn decrease_diff_font_size_for_pane(&mut self, pane_id: &str) -> bool {
+        let Some(pane) = self.panes.get_mut(pane_id).and_then(SessionPane::diff_mut) else {
+            return false;
+        };
+        pane.decrease_font_size();
+        true
+    }
+
+    pub(crate) fn reset_diff_font_size_for_pane(&mut self, pane_id: &str) -> bool {
+        let Some(pane) = self.panes.get_mut(pane_id).and_then(SessionPane::diff_mut) else {
+            return false;
+        };
+        pane.reset_font_size();
+        true
+    }
+
     pub(crate) fn goto_split_from_surface(
         &mut self,
         surface_ptr: usize,

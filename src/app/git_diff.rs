@@ -106,11 +106,15 @@ pub(crate) fn render_error_html(worktree_path: &str, error: &str) -> String {
 
 pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
     let title = repo_title(&snapshot.worktree_path);
-    let file_tree = render_file_tree(snapshot);
-    let sections = render_snapshot_files(snapshot);
+    let files = merged_files(snapshot);
+    let total_added = files.iter().map(|file| file.added).sum::<usize>();
+    let total_removed = files.iter().map(|file| file.removed).sum::<usize>();
+    let file_tree = render_file_tree(&files);
+    let sections = render_snapshot_files(&files);
     let body = format!(
-        "<div class=\"diff-shell\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"view-toolbar\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-file\" title=\"Previous file\" aria-label=\"Previous file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-file\" title=\"Next file\" aria-label=\"Next file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-hunk\" title=\"Previous change\" aria-label=\"Previous change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-hunk\" title=\"Next change\" aria-label=\"Next change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-collapse\" title=\"Collapse files\" aria-label=\"Collapse files\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"close-diff\" title=\"Close diff\" aria-label=\"Close diff\">{}</button></div><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div>",
-        file_tree,
+        "<div class=\"diff-shell\"><div class=\"view-toolbar\"><div class=\"view-toolbar-meta\"><span class=\"toolbar-total toolbar-total-added\">+{}</span><span class=\"toolbar-total toolbar-total-removed\">-{}</span></div><div class=\"view-toolbar-actions\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-file\" title=\"Previous file\" aria-label=\"Previous file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-file\" title=\"Next file\" aria-label=\"Next file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-hunk\" title=\"Previous change\" aria-label=\"Previous change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-hunk\" title=\"Next change\" aria-label=\"Next change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-collapse\" title=\"Collapse files\" aria-label=\"Collapse files\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"close-diff\" title=\"Close diff\" aria-label=\"Close diff\">{}</button></div></div><div class=\"diff-zoom-surface\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div></div>",
+        total_added,
+        total_removed,
         tree_icon(),
         chevron_up_icon(),
         chevron_down_icon(),
@@ -119,6 +123,7 @@ pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
         collapse_icon(),
         fullscreen_icon(),
         close_icon(),
+        file_tree,
         escape_html(&title),
         escape_html(&snapshot.worktree_path),
         sections,
@@ -135,8 +140,7 @@ pub(crate) fn inject_preserved_state(html: &str, state_json: &str) -> String {
     html.replacen("<script>", &bootstrap, 1)
 }
 
-fn render_snapshot_files(snapshot: &DiffSnapshot) -> String {
-    let files = merged_files(snapshot);
+fn render_snapshot_files(files: &[MergedDiffFile]) -> String {
     let total_count = files.len();
 
     if total_count == 0 {
@@ -740,10 +744,9 @@ fn diff_line_number(line: &DiffLine) -> Option<usize> {
     line.new_line.or(line.old_line)
 }
 
-fn render_file_tree(snapshot: &DiffSnapshot) -> String {
-    let files = merged_files(snapshot);
+fn render_file_tree(files: &[MergedDiffFile]) -> String {
     let mut root = TreeDirectory::default();
-    for file in &files {
+    for file in files {
         insert_tree_file(&mut root, file);
     }
     let tree_html = if root.directories.is_empty() && root.files.is_empty() {
@@ -850,9 +853,10 @@ fn render_tree_directory(
 ) -> String {
     let (label, path, directory) = flatten_tree_directory(name, directory, path_prefix);
     format!(
-        "<details class=\"tree-group tree-dir\" data-tree-id=\"{}\" open><summary class=\"tree-row tree-row-dir\" style=\"--depth:{}\"><span class=\"tree-caret\"></span><span class=\"tree-icon tree-icon-folder\">{}</span><span class=\"tree-label\">{}</span></summary><div class=\"tree-children\">{}</div></details>",
+        "<details class=\"tree-group tree-dir\" data-tree-id=\"{}\" open><summary class=\"tree-row tree-row-dir\" style=\"--depth:{}\"><span class=\"tree-caret\">{}</span><span class=\"tree-icon tree-icon-folder\">{}</span><span class=\"tree-label\">{}</span></summary><div class=\"tree-children\">{}</div></details>",
         escape_html(&tree_dom_id(&path)),
         depth,
+        chevron_icon(),
         folder_icon(),
         escape_html(&label),
         render_tree_directory_contents(directory, depth + 1, &path)
@@ -1087,6 +1091,7 @@ fn document_css() -> &'static str {
   --ctx-bg: #17181a;
   --gap-bg: #34363a;
   --hunk-bg: #141518;
+  --diff-zoom: 0.88;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -1100,12 +1105,16 @@ body {
   padding: 18px;
 }
 .diff-shell {
+  display: block;
+}
+.diff-zoom-surface {
   display: grid;
   grid-template-columns: 0 minmax(0, 1fr);
   gap: 18px;
   align-items: start;
+  zoom: var(--diff-zoom);
 }
-body.tree-open .diff-shell {
+body.tree-open .diff-zoom-surface {
   grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
 }
 .diff-main {
@@ -1116,43 +1125,66 @@ body.tree-open .diff-shell {
   top: 0;
   z-index: 30;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  margin-bottom: 6px;
-  padding: 2px 0 8px;
+  margin-bottom: 4px;
+  padding: 0 0 6px;
   background: linear-gradient(180deg, rgba(15, 16, 17, 0.98) 0%, rgba(15, 16, 17, 0.92) 72%, rgba(15, 16, 17, 0) 100%);
 }
+.view-toolbar-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.toolbar-total {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.toolbar-total-added {
+  color: #42d17f;
+}
+.toolbar-total-removed {
+  color: #ff5f61;
+}
+.view-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .toolbar-btn {
-  width: 34px;
-  height: 34px;
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 10px;
-  background: rgba(26, 27, 30, 0.9);
-  color: #c6ccd4;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8f97a2;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: background 120ms ease, color 120ms ease;
 }
 .toolbar-btn:hover {
-  background: rgba(36, 38, 42, 0.98);
+  background: rgba(255,255,255,0.04);
+  color: #cfd5dc;
 }
 .toolbar-btn:disabled {
   opacity: 0.42;
   cursor: default;
 }
 .toolbar-btn:disabled:hover {
-  background: rgba(26, 27, 30, 0.9);
+  background: transparent;
 }
 .toolbar-btn.is-active {
-  border-color: rgba(104, 156, 255, 0.28);
-  background: rgba(33, 38, 48, 0.98);
+  background: rgba(255,255,255,0.04);
   color: #9ec6ff;
 }
 .toolbar-btn svg {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.9;
@@ -1175,13 +1207,13 @@ body.tree-open .file-tree-panel {
   transform: translateX(0);
 }
 .file-tree-shell {
-  padding: 4px 0 0;
+  padding: 2px 0 0;
 }
 .file-tree-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   padding: 0;
 }
 .file-tree-count {
@@ -1191,11 +1223,11 @@ body.tree-open .file-tree-panel {
 }
 .file-tree-filter {
   display: block;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 .file-tree-filter input {
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 9px;
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: 6px;
   background: rgba(24, 25, 27, 0.72);
@@ -1230,15 +1262,16 @@ body.tree-open .file-tree-panel {
 }
 .tree-row {
   --depth: 0;
-  --tree-indent-step: 24px;
+  --tree-indent-step: 10px;
   position: relative;
   width: 100%;
-  min-height: 28px;
-  display: flex;
+  min-height: 24px;
+  display: grid;
+  grid-template-columns: 10px 12px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
+  column-gap: 6px;
   margin-bottom: 0;
-  padding: 3px 6px 3px calc(8px + (var(--depth) * var(--tree-indent-step)));
+  padding: 2px 6px 2px calc(4px + (var(--depth) * var(--tree-indent-step)));
   border-radius: 0;
   border: 0;
   background: transparent;
@@ -1248,7 +1281,7 @@ body.tree-open .file-tree-panel {
 .tree-row::before {
   content: "";
   position: absolute;
-  left: calc(13px + (var(--depth) * var(--tree-indent-step)));
+  left: calc(8px + (var(--depth) * var(--tree-indent-step)));
   top: 0;
   bottom: 0;
   width: 1px;
@@ -1257,9 +1290,9 @@ body.tree-open .file-tree-panel {
 .tree-row::after {
   content: "";
   position: absolute;
-  left: calc(13px + (var(--depth) * var(--tree-indent-step)));
+  left: calc(8px + (var(--depth) * var(--tree-indent-step)));
   top: 50%;
-  width: 8px;
+  width: 4px;
   height: 1px;
   background: rgba(255,255,255,0.05);
 }
@@ -1279,22 +1312,33 @@ body.tree-open .file-tree-panel {
   background: rgba(255,255,255,0.025);
 }
 .tree-file.is-active {
-  background: rgba(255,255,255,0.035);
+  background: rgba(255,255,255,0.03);
   box-shadow: inset 2px 0 0 rgba(104, 156, 255, 0.75);
 }
 .tree-caret,
 .tree-row-spacer {
   position: relative;
   z-index: 1;
-  width: 12px;
-  flex: none;
+  width: 10px;
+  height: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: #c8ccd3;
 }
-.tree-caret::before {
-  content: "⌄";
+.tree-caret svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: rotate(-90deg);
+  transition: transform 120ms ease;
 }
-.tree-group:not([open]) > summary .tree-caret::before {
-  content: "›";
+.tree-group[open] > summary .tree-caret svg {
+  transform: rotate(0deg);
 }
 .tree-row-spacer::before {
   content: "";
@@ -1302,14 +1346,16 @@ body.tree-open .file-tree-panel {
 .tree-icon {
   position: relative;
   z-index: 1;
-  width: 14px;
-  height: 14px;
-  flex: none;
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: #bcc3cc;
 }
 .tree-icon svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.8;
@@ -1318,15 +1364,13 @@ body.tree-open .file-tree-panel {
 }
 .tree-label {
   min-width: 0;
-  flex: 1;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tree-stage-dot {
-  flex: none;
   width: 5px;
   height: 5px;
   border-radius: 999px;
@@ -1341,9 +1385,9 @@ body.tree-open .file-tree-panel {
   background: linear-gradient(90deg, #7ee7a7 0 50%, #9ec6ff 50% 100%);
 }
 .tree-empty {
-  padding: 6px 6px 6px 20px;
+  padding: 4px 6px 4px 18px;
   color: #737b85;
-  font-size: 12px;
+  font-size: 11px;
 }
 .hero {
   margin-bottom: 12px;
@@ -2210,6 +2254,7 @@ fn document_js() -> &'static str {
 
     return JSON.stringify({
       scrollY: window.scrollY,
+      diffZoom: Number(body.dataset.diffZoom || 1),
       treeOpen: body.classList.contains('tree-open'),
       splitZoomed: fullscreenButton?.classList.contains('is-active') || false,
       filterValue: filterInput?.value || "",
@@ -2222,6 +2267,10 @@ fn document_js() -> &'static str {
 
   function restoreDiffState(state) {
     if (!state || typeof state !== 'object') return;
+
+    if (Number.isFinite(state.diffZoom)) {
+      setDiffZoom(Number(state.diffZoom));
+    }
 
     body.classList.toggle('tree-open', !!state.treeOpen);
     fullscreenButton?.classList.toggle('is-active', !!state.splitZoomed);
@@ -2252,6 +2301,38 @@ fn document_js() -> &'static str {
     syncToolbar();
     syncActiveFileFromScroll();
   }
+
+  const DEFAULT_DIFF_ZOOM = 0.88;
+  const MIN_DIFF_ZOOM = 0.75;
+  const MAX_DIFF_ZOOM = 1.75;
+  const DIFF_ZOOM_STEP = 1 / 13;
+
+  function clampDiffZoom(value) {
+    return Math.min(MAX_DIFF_ZOOM, Math.max(MIN_DIFF_ZOOM, value));
+  }
+
+  function roundedDiffZoom(value) {
+    return Math.round(value * 1000) / 1000;
+  }
+
+  function setDiffZoom(value) {
+    const zoom = roundedDiffZoom(clampDiffZoom(value));
+    body.dataset.diffZoom = String(zoom);
+    document.documentElement.style.setProperty('--diff-zoom', String(zoom));
+    return zoom;
+  }
+
+  function adjustDiffZoom(stepDelta) {
+    const current = Number(body.dataset.diffZoom || 1);
+    return setDiffZoom(current + (stepDelta * DIFF_ZOOM_STEP));
+  }
+
+  function resetDiffZoom() {
+    return setDiffZoom(DEFAULT_DIFF_ZOOM);
+  }
+
+  window.__NOT_TERMINAL_DIFF_ADJUST_ZOOM__ = adjustDiffZoom;
+  window.__NOT_TERMINAL_DIFF_RESET_ZOOM__ = resetDiffZoom;
 
   window.__NOT_TERMINAL_DIFF_CAPTURE_STATE__ = captureDiffState;
 
@@ -2386,6 +2467,7 @@ fn document_js() -> &'static str {
   });
 
   const preferred = firstPreferredCard();
+  setDiffZoom(DEFAULT_DIFF_ZOOM);
   if (preferred) {
     setActiveFile(preferred.dataset.fileId || '', { scroll: false });
   }
@@ -2432,11 +2514,15 @@ fn close_icon() -> &'static str {
 }
 
 fn folder_icon() -> &'static str {
-    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l1.6 1.8H19A1.5 1.5 0 0 1 20.5 9.3v7.2A1.5 1.5 0 0 1 19 18H5a1.5 1.5 0 0 1-1.5-1.5Z"></path></svg>"#
+    r#"<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1.75 3.25A.75.75 0 0 1 2.5 2.5h2.1l.95 1h3.95a.75.75 0 0 1 .75.75v5a.75.75 0 0 1-.75.75h-7a.75.75 0 0 1-.75-.75z"></path></svg>"#
+}
+
+fn chevron_icon() -> &'static str {
+    r#"<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.25 4.5 6 7.25 8.75 4.5"></path></svg>"#
 }
 
 fn file_icon() -> &'static str {
-    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5h6l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 7 19V6A1.5 1.5 0 0 1 8.5 4.5Z"></path><path d="M14 4.5V9h4"></path></svg>"#
+    r#"<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.75h3.25L8.5 4v6.25a.75.75 0 0 1-.75.75H3a.75.75 0 0 1-.75-.75V2.5A.75.75 0 0 1 3 1.75Z"></path><path d="M6.25 1.75V4H8.5"></path></svg>"#
 }
 
 fn infer_language(path: &str) -> &'static str {

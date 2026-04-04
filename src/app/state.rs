@@ -2417,6 +2417,18 @@ impl App {
                         }
                         changed
                     }
+                    crate::app::diff_runtime::DiffPaneAction::FontIncrease => self
+                        .runtimes
+                        .get_mut(&terminal_id)
+                        .is_some_and(|runtime| runtime.increase_diff_font_size_for_pane(&pane_id)),
+                    crate::app::diff_runtime::DiffPaneAction::FontDecrease => self
+                        .runtimes
+                        .get_mut(&terminal_id)
+                        .is_some_and(|runtime| runtime.decrease_diff_font_size_for_pane(&pane_id)),
+                    crate::app::diff_runtime::DiffPaneAction::FontReset => self
+                        .runtimes
+                        .get_mut(&terminal_id)
+                        .is_some_and(|runtime| runtime.reset_diff_font_size_for_pane(&pane_id)),
                 };
                 changed = changed || action_changed;
             }

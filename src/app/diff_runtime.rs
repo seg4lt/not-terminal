@@ -5,6 +5,9 @@ use crate::webview::WebView;
 pub(crate) enum DiffPaneAction {
     ToggleSplitZoom,
     ToggleDiffView,
+    FontIncrease,
+    FontDecrease,
+    FontReset,
 }
 
 pub(crate) struct DiffPaneRuntime {
@@ -18,6 +21,10 @@ pub(crate) struct DiffPaneRuntime {
 }
 
 const DIFF_STATE_CAPTURE_SCRIPT: &str = r#"window.__NOT_TERMINAL_DIFF_CAPTURE_STATE__ ? window.__NOT_TERMINAL_DIFF_CAPTURE_STATE__() : "";"#;
+const DIFF_ZOOM_INCREASE_SCRIPT: &str = r#"window.__NOT_TERMINAL_DIFF_ADJUST_ZOOM__ ? window.__NOT_TERMINAL_DIFF_ADJUST_ZOOM__(1) : "";"#;
+const DIFF_ZOOM_DECREASE_SCRIPT: &str = r#"window.__NOT_TERMINAL_DIFF_ADJUST_ZOOM__ ? window.__NOT_TERMINAL_DIFF_ADJUST_ZOOM__(-1) : "";"#;
+const DIFF_ZOOM_RESET_SCRIPT: &str =
+    r#"window.__NOT_TERMINAL_DIFF_RESET_ZOOM__ ? window.__NOT_TERMINAL_DIFF_RESET_ZOOM__() : "";"#;
 
 impl DiffPaneRuntime {
     pub(crate) fn new(
@@ -68,7 +75,22 @@ impl DiffPaneRuntime {
         match action.as_str() {
             "toggle-split-zoom" => Some(DiffPaneAction::ToggleSplitZoom),
             "toggle-diff-view" => Some(DiffPaneAction::ToggleDiffView),
+            "diff-font-increase" => Some(DiffPaneAction::FontIncrease),
+            "diff-font-decrease" => Some(DiffPaneAction::FontDecrease),
+            "diff-font-reset" => Some(DiffPaneAction::FontReset),
             _ => None,
         }
+    }
+
+    pub(crate) fn increase_font_size(&self) {
+        let _ = self.webview.evaluate_javascript(DIFF_ZOOM_INCREASE_SCRIPT);
+    }
+
+    pub(crate) fn decrease_font_size(&self) {
+        let _ = self.webview.evaluate_javascript(DIFF_ZOOM_DECREASE_SCRIPT);
+    }
+
+    pub(crate) fn reset_font_size(&self) {
+        let _ = self.webview.evaluate_javascript(DIFF_ZOOM_RESET_SCRIPT);
     }
 }

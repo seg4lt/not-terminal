@@ -12,6 +12,7 @@ typedef struct rust_webview_s {
     char *pending_action;
     id event_monitor;
     id mouse_monitor;
+    bool prefers_key_equivalents;
 } rust_webview_t;
 
 static bool rust_webview_is_owned_responder(rust_webview_t *wrapper, NSResponder *responder) {
@@ -33,6 +34,14 @@ static bool rust_webview_is_owned_responder(rust_webview_t *wrapper, NSResponder
     }
 
     return false;
+}
+
+static bool rust_webview_contains_view(rust_webview_t *wrapper, NSView *view) {
+    if (wrapper == NULL || wrapper->webview == nil || view == nil) {
+        return false;
+    }
+
+    return view == wrapper->webview || [view isDescendantOf:wrapper->webview];
 }
 
 static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
@@ -135,6 +144,19 @@ static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
         return [super performKeyEquivalent:event];
     }
 
+    NSWindow *window = [self window];
+    if (window == nil) {
+        return [super performKeyEquivalent:event];
+    }
+
+    NSResponder *firstResponder = [window firstResponder];
+    BOOL shouldHandleShortcut =
+        rust_webview_is_owned_responder(self.rustWrapper, firstResponder) ||
+        self.rustWrapper->prefers_key_equivalents;
+    if (!shouldHandleShortcut) {
+        return [super performKeyEquivalent:event];
+    }
+
     NSEventModifierFlags modifiers =
         [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
     BOOL command = (modifiers & NSEventModifierFlagCommand) != 0;
@@ -150,6 +172,26 @@ static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
         }
         self.rustWrapper->pending_action = strdup("toggle-diff-view");
         return YES;
+    }
+
+    if (command && !control && !option) {
+        const char *action = NULL;
+        if ([characters isEqualToString:@"="] || [characters isEqualToString:@"+"]) {
+            action = "diff-font-increase";
+        } else if ([characters isEqualToString:@"-"] || [characters isEqualToString:@"_"]) {
+            action = "diff-font-decrease";
+        } else if ([characters isEqualToString:@"0"]) {
+            action = "diff-font-reset";
+        }
+
+        if (action != NULL) {
+            if (self.rustWrapper->pending_action != NULL) {
+                free(self.rustWrapper->pending_action);
+                self.rustWrapper->pending_action = NULL;
+            }
+            self.rustWrapper->pending_action = strdup(action);
+            return YES;
+        }
     }
 
     return [super performKeyEquivalent:event];
@@ -259,6 +301,7 @@ void *webview_new(void *parent_ns_view) {
     wrapper->webview = webview;
     wrapper->container = container;
     wrapper->pending_action = NULL;
+    wrapper->prefers_key_equivalents = false;
     wrapper->event_monitor =
         [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskFlagsChanged | NSEventMaskKeyDown | NSEventMaskKeyUp)
                                               handler:^NSEvent *_Nullable(NSEvent *event) {
@@ -329,6 +372,18 @@ void *webview_new(void *parent_ns_view) {
                                                   NSWindow *window = [wrapper->webview window];
                                                   if (window == nil || [event window] != window) {
                                                       return event;
+                                                  }
+
+                                                  NSView *contentView = [window contentView];
+                                                  if (contentView != nil) {
+                                                      NSPoint point =
+                                                          [contentView convertPoint:[event locationInWindow]
+                                                                           fromView:nil];
+                                                      NSView *hitView = [contentView hitTest:point];
+                                                      wrapper->prefers_key_equivalents =
+                                                          rust_webview_contains_view(wrapper, hitView);
+                                                  } else {
+                                                      wrapper->prefers_key_equivalents = false;
                                                   }
 
                                                   NSResponder *saved = [window firstResponder];
@@ -513,6 +568,7 @@ void webview_set_hidden(void *webview_ptr, bool hidden) {
     }
 
     if (hidden) {
+        wrapper->prefers_key_equivalents = false;
         rust_webview_restore_safe_responder(wrapper);
     }
 
@@ -719,6 +775,7 @@ void webview_set_keyboard_enabled(void *webview_ptr, bool enabled) {
 
     // If disabling, resign first responder immediately so the terminal can reclaim it.
     if (!enabled) {
+        wrapper->prefers_key_equivalents = false;
         rust_webview_restore_safe_responder(wrapper);
     }
 }
@@ -735,5 +792,6 @@ void webview_lose_focus(void *webview_ptr) {
     }
 
     // Make the window the key window to take focus away from webview
+    wrapper->prefers_key_equivalents = false;
     rust_webview_restore_safe_responder(wrapper);
 }
