@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -24,7 +25,6 @@ pub(crate) struct DiffFile {
 
 #[derive(Debug, Clone)]
 pub(crate) struct DiffHunk {
-    pub(crate) header: String,
     pub(crate) lines: Vec<DiffLine>,
 }
 
@@ -42,13 +42,12 @@ struct MergedDiffFile {
     removed: usize,
     hunks: Vec<MergedDiffHunk>,
     stage: FileStage,
+    source_lines: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 struct MergedDiffHunk {
-    header: String,
     lines: Vec<DiffLine>,
-    stage: FileStage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,15 +109,25 @@ pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
     let file_tree = render_file_tree(snapshot);
     let sections = render_snapshot_files(snapshot);
     let body = format!(
-        "<div class=\"diff-shell\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"view-toolbar\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button></div><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div>",
+        "<div class=\"diff-shell\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"view-toolbar\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"close-diff\" title=\"Close diff\" aria-label=\"Close diff\">{}</button></div><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div>",
         file_tree,
         tree_icon(),
         fullscreen_icon(),
+        close_icon(),
         escape_html(&title),
         escape_html(&snapshot.worktree_path),
         sections,
     );
     render_document(&title, &body)
+}
+
+pub(crate) fn inject_preserved_state(html: &str, state_json: &str) -> String {
+    let escaped_state = state_json.replace("</", "<\\/");
+    let bootstrap = format!(
+        "<script>window.__NOT_TERMINAL_DIFF_INITIAL_STATE__ = {};</script><script>",
+        escaped_state
+    );
+    html.replacen("<script>", &bootstrap, 1)
 }
 
 fn render_snapshot_files(snapshot: &DiffSnapshot) -> String {
@@ -208,10 +217,7 @@ fn parse_patch(patch: &str) -> Vec<DiffFile> {
         if let Some((next_old_line, next_new_line)) = parse_hunk_header(raw_line) {
             old_line = next_old_line;
             new_line = next_new_line;
-            file.hunks.push(DiffHunk {
-                header: raw_line.to_string(),
-                lines: Vec::new(),
-            });
+            file.hunks.push(DiffHunk { lines: Vec::new() });
             current_hunk = Some(file.hunks.len() - 1);
             continue;
         }
@@ -367,22 +373,14 @@ fn merged_files(snapshot: &DiffSnapshot) -> Vec<MergedDiffFile> {
                     .extend(file.hunks.iter().cloned().map(|hunk| {
                         let mut lines = hunk.lines;
                         annotate_inline_changes(&mut lines);
-                        MergedDiffHunk {
-                            header: hunk.header,
-                            lines,
-                            stage,
-                        }
+                        MergedDiffHunk { lines }
                     }));
             } else {
                 let mut hunks = Vec::with_capacity(file.hunks.len());
                 for hunk in &file.hunks {
                     let mut lines = hunk.lines.clone();
                     annotate_inline_changes(&mut lines);
-                    hunks.push(MergedDiffHunk {
-                        header: hunk.header.clone(),
-                        lines,
-                        stage,
-                    });
+                    hunks.push(MergedDiffHunk { lines });
                 }
 
                 merged.push(MergedDiffFile {
@@ -391,12 +389,26 @@ fn merged_files(snapshot: &DiffSnapshot) -> Vec<MergedDiffFile> {
                     removed: file.removed,
                     hunks,
                     stage,
+                    source_lines: load_source_lines(&snapshot.worktree_path, &file.path),
                 });
             }
         }
     }
 
+    for file in &mut merged {
+        file.hunks.sort_by_key(hunk_display_start);
+    }
+
     merged
+}
+
+fn load_source_lines(worktree_path: &str, file_path: &str) -> Vec<String> {
+    let full_path = Path::new(worktree_path).join(file_path);
+    let Ok(source) = fs::read_to_string(full_path) else {
+        return Vec::new();
+    };
+
+    source.lines().map(ToOwned::to_owned).collect()
 }
 
 fn annotate_inline_changes(lines: &mut [DiffLine]) {
@@ -605,17 +617,9 @@ fn render_file(file: &MergedDiffFile) -> String {
     let hunks = if file.hunks.is_empty() {
         "<div class=\"file-empty\">No textual changes to display.</div>".to_string()
     } else {
-        file.hunks
-            .iter()
-            .map(render_hunk)
-            .collect::<Vec<_>>()
-            .join("")
+        render_file_hunks(file, &file_id)
     };
-    let open_attr = if matches!(file.stage, FileStage::Index) {
-        ""
-    } else {
-        " open"
-    };
+    let open_attr = " open";
 
     format!(
         "<details id=\"{}\" class=\"file-card\" data-language=\"{}\" data-file-id=\"{}\" data-stage=\"{}\" data-search=\"{} {}\"{}><summary><span class=\"file-main\"><span class=\"file-path\">{}</span><span class=\"file-stage-meta\">{}</span></span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\">{}</div></details>",
@@ -634,6 +638,103 @@ fn render_file(file: &MergedDiffFile) -> String {
     )
 }
 
+fn render_file_hunks(file: &MergedDiffFile, file_id: &str) -> String {
+    let mut rendered = String::new();
+    let mut previous_end = 0usize;
+
+    for (hunk_index, hunk) in file.hunks.iter().enumerate() {
+        let next_start = hunk_display_start(hunk);
+        if next_start > previous_end.saturating_add(1) {
+            rendered.push_str(&render_context_excerpt(
+                file_id,
+                &file.source_lines,
+                previous_end.saturating_add(1),
+                next_start - 1,
+            ));
+        }
+
+        rendered.push_str(&render_hunk(file_id, hunk, hunk_index));
+        previous_end = hunk_display_end(hunk).max(previous_end);
+    }
+
+    if file.source_lines.len() > previous_end {
+        rendered.push_str(&render_context_excerpt(
+            file_id,
+            &file.source_lines,
+            previous_end.saturating_add(1),
+            file.source_lines.len(),
+        ));
+    }
+
+    rendered
+}
+
+fn render_context_excerpt(
+    file_id: &str,
+    source_lines: &[String],
+    start_line: usize,
+    end_line: usize,
+) -> String {
+    if start_line == 0 || end_line < start_line {
+        return String::new();
+    }
+
+    let total_lines = end_line - start_line + 1;
+    let excerpt_rows = source_lines
+        .iter()
+        .enumerate()
+        .skip(start_line - 1)
+        .take(total_lines)
+        .enumerate()
+        .map(|(offset, (index, text))| {
+            render_hidden_context_row(
+                &DiffLine {
+                    kind: DiffLineKind::Context,
+                    old_line: Some(index + 1),
+                    new_line: Some(index + 1),
+                    text: text.clone(),
+                    inline_ranges: Vec::new(),
+                },
+                offset,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if excerpt_rows.is_empty() {
+        return String::new();
+    }
+
+    let excerpt_id = excerpt_dom_id(file_id, &format!("gap-{start_line}-{end_line}"));
+    format!(
+        "<div class=\"context-group context-group-file\" data-excerpt-id=\"{}\" data-excerpt-total=\"{}\">{}<div class=\"row row-gap row-gap-boundary\" data-role=\"excerpt-controls\"><div class=\"line gap-line\"><button class=\"gap-edge-button\" type=\"button\" data-role=\"excerpt-expand-top\" aria-label=\"Reveal more above\"><span class=\"gap-control-icon gap-control-icon-up\"></span></button><button class=\"gap-edge-button\" type=\"button\" data-role=\"excerpt-expand-bottom\" aria-label=\"Reveal more below\"><span class=\"gap-control-icon gap-control-icon-down\"></span></button></div><div class=\"code\"><span class=\"gap-label\" data-role=\"excerpt-label\">{} unchanged lines</span></div></div></div>",
+        escape_html(&excerpt_id),
+        total_lines,
+        excerpt_rows,
+        total_lines
+    )
+}
+
+fn hunk_display_start(hunk: &MergedDiffHunk) -> usize {
+    hunk.lines
+        .iter()
+        .filter_map(diff_line_number)
+        .min()
+        .unwrap_or(0)
+}
+
+fn hunk_display_end(hunk: &MergedDiffHunk) -> usize {
+    hunk.lines
+        .iter()
+        .filter_map(diff_line_number)
+        .max()
+        .unwrap_or(0)
+}
+
+fn diff_line_number(line: &DiffLine) -> Option<usize> {
+    line.new_line.or(line.old_line)
+}
+
 fn render_file_tree(snapshot: &DiffSnapshot) -> String {
     let files = merged_files(snapshot);
     let mut root = TreeDirectory::default();
@@ -643,7 +744,7 @@ fn render_file_tree(snapshot: &DiffSnapshot) -> String {
     let tree_html = if root.directories.is_empty() && root.files.is_empty() {
         String::from("<div class=\"tree-empty\">Nothing here</div>")
     } else {
-        render_tree_directory_contents(&root, 0)
+        render_tree_directory_contents(&root, 0, "")
     };
 
     format!(
@@ -655,6 +756,14 @@ fn render_file_tree(snapshot: &DiffSnapshot) -> String {
 
 fn file_dom_id(path: &str) -> String {
     format!("file-{}", slugify(path))
+}
+
+fn excerpt_dom_id(file_id: &str, key: &str) -> String {
+    format!("excerpt-{}-{}", file_id, slugify(key))
+}
+
+fn tree_dom_id(path: &str) -> String {
+    format!("tree-{}", slugify(path))
 }
 
 fn slugify(value: &str) -> String {
@@ -707,11 +816,15 @@ fn insert_tree_file(root: &mut TreeDirectory, file: &MergedDiffFile) {
     });
 }
 
-fn render_tree_directory_contents(directory: &TreeDirectory, depth: usize) -> String {
+fn render_tree_directory_contents(
+    directory: &TreeDirectory,
+    depth: usize,
+    path_prefix: &str,
+) -> String {
     let mut rendered = directory
         .directories
         .iter()
-        .map(|(name, child)| render_tree_directory(name, child, depth))
+        .map(|(name, child)| render_tree_directory(name, child, depth, path_prefix))
         .collect::<Vec<_>>();
 
     let mut files = directory.files.iter().collect::<Vec<_>>();
@@ -720,13 +833,24 @@ fn render_tree_directory_contents(directory: &TreeDirectory, depth: usize) -> St
     rendered.join("")
 }
 
-fn render_tree_directory(name: &str, directory: &TreeDirectory, depth: usize) -> String {
+fn render_tree_directory(
+    name: &str,
+    directory: &TreeDirectory,
+    depth: usize,
+    path_prefix: &str,
+) -> String {
+    let path = if path_prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{path_prefix}/{name}")
+    };
     format!(
-        "<details class=\"tree-group tree-dir\" open><summary class=\"tree-row tree-row-dir\" style=\"--depth:{}\"><span class=\"tree-caret\"></span><span class=\"tree-icon tree-icon-folder\">{}</span><span class=\"tree-label\">{}</span></summary><div class=\"tree-children\">{}</div></details>",
+        "<details class=\"tree-group tree-dir\" data-tree-id=\"{}\" open><summary class=\"tree-row tree-row-dir\" style=\"--depth:{}\"><span class=\"tree-caret\"></span><span class=\"tree-icon tree-icon-folder\">{}</span><span class=\"tree-label\">{}</span></summary><div class=\"tree-children\">{}</div></details>",
+        escape_html(&tree_dom_id(&path)),
         depth,
         folder_icon(),
         escape_html(name),
-        render_tree_directory_contents(directory, depth + 1)
+        render_tree_directory_contents(directory, depth + 1, &path)
     )
 }
 
@@ -760,18 +884,15 @@ fn file_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-fn render_hunk(hunk: &MergedDiffHunk) -> String {
-    let rows = render_hunk_rows(&hunk.lines);
+fn render_hunk(file_id: &str, hunk: &MergedDiffHunk, hunk_index: usize) -> String {
+    let rows = render_hunk_rows(file_id, hunk_index, &hunk.lines);
     format!(
-        "<div class=\"hunk\"><div class=\"hunk-header\"><span class=\"hunk-header-text\">{}</span><span class=\"hunk-stage hunk-stage-{}\">{}</span></div><div class=\"diff-grid\">{}</div></div>",
-        escape_html(&hunk.header),
-        hunk.stage.dom_label(),
-        escape_html(hunk.stage.meta_label()),
+        "<div class=\"hunk\"><div class=\"diff-grid\">{}</div></div>",
         rows
     )
 }
 
-fn render_hunk_rows(lines: &[DiffLine]) -> String {
+fn render_hunk_rows(file_id: &str, hunk_index: usize, lines: &[DiffLine]) -> String {
     let mut rendered = String::new();
     let mut index = 0usize;
 
@@ -795,14 +916,30 @@ fn render_hunk_rows(lines: &[DiffLine]) -> String {
                 rendered.push_str(&render_row(line));
             }
             let hidden_lines = &context_run[CONTEXT_VISIBLE..context_run.len() - CONTEXT_VISIBLE];
+            let hidden_rows = hidden_lines
+                .iter()
+                .enumerate()
+                .map(|(offset, line)| render_hidden_context_row(line, offset))
+                .collect::<Vec<_>>()
+                .join("");
+            let hidden_start = hidden_lines
+                .first()
+                .and_then(diff_line_number)
+                .unwrap_or_default();
+            let hidden_end = hidden_lines
+                .last()
+                .and_then(diff_line_number)
+                .unwrap_or_default();
+            let excerpt_id = excerpt_dom_id(
+                file_id,
+                &format!("hunk-{hunk_index}-{hidden_start}-{hidden_end}"),
+            );
             rendered.push_str(&format!(
-                "<details class=\"context-group\"><summary class=\"row row-gap\" title=\"Expand excerpt\" data-role=\"context-toggle\" tabindex=\"0\"><div class=\"line gap-line\"><span class=\"gap-control\" aria-hidden=\"true\"><span class=\"gap-control-icon gap-control-icon-up\"></span><span class=\"gap-control-icon gap-control-icon-down\"></span></span><span class=\"gap-popover\"><span class=\"gap-popover-title\">Expand excerpt</span><span class=\"gap-popover-shortcut\">Shift+Enter</span></span></div><div class=\"code\"><span class=\"gap-label\">{} unchanged lines</span><span class=\"gap-action\" data-open-label=\"Hide context\" data-closed-label=\"Show context\"></span></div></summary><div class=\"context-hidden\">{}</div></details>",
+                "<div class=\"context-group\" data-excerpt-id=\"{}\" data-excerpt-total=\"{}\">{}<div class=\"row row-gap row-gap-boundary\" data-role=\"excerpt-controls\"><div class=\"line gap-line\"><button class=\"gap-edge-button\" type=\"button\" data-role=\"excerpt-expand-top\" aria-label=\"Reveal more above\"><span class=\"gap-control-icon gap-control-icon-up\"></span></button><button class=\"gap-edge-button\" type=\"button\" data-role=\"excerpt-expand-bottom\" aria-label=\"Reveal more below\"><span class=\"gap-control-icon gap-control-icon-down\"></span></button></div><div class=\"code\"><span class=\"gap-label\" data-role=\"excerpt-label\">{} unchanged lines</span></div></div></div>",
+                escape_html(&excerpt_id),
                 hidden_lines.len(),
-                hidden_lines
-                    .iter()
-                    .map(render_row)
-                    .collect::<Vec<_>>()
-                    .join("")
+                hidden_rows,
+                hidden_lines.len()
             ));
             for line in &context_run[context_run.len() - CONTEXT_VISIBLE..] {
                 rendered.push_str(&render_row(line));
@@ -869,6 +1006,14 @@ fn render_row(line: &DiffLine) -> String {
         escape_html(&line.text),
         inline_attrs,
         escape_html(&line.text)
+    )
+}
+
+fn render_hidden_context_row(line: &DiffLine, index: usize) -> String {
+    format!(
+        "<div class=\"context-expand-row\" data-row-index=\"{}\">{}</div>",
+        index,
+        render_row(line)
     )
 }
 
@@ -1044,6 +1189,7 @@ body.tree-open .file-tree-panel {
 }
 .tree-row {
   --depth: 0;
+  --tree-indent-step: 24px;
   position: relative;
   width: 100%;
   min-height: 28px;
@@ -1051,7 +1197,7 @@ body.tree-open .file-tree-panel {
   align-items: center;
   gap: 7px;
   margin-bottom: 0;
-  padding: 3px 6px 3px calc(8px + (var(--depth) * 18px));
+  padding: 3px 6px 3px calc(8px + (var(--depth) * var(--tree-indent-step)));
   border-radius: 0;
   border: 0;
   background: transparent;
@@ -1061,7 +1207,7 @@ body.tree-open .file-tree-panel {
 .tree-row::before {
   content: "";
   position: absolute;
-  left: calc(13px + (var(--depth) * 18px));
+  left: calc(13px + (var(--depth) * var(--tree-indent-step)));
   top: 0;
   bottom: 0;
   width: 1px;
@@ -1070,7 +1216,7 @@ body.tree-open .file-tree-panel {
 .tree-row::after {
   content: "";
   position: absolute;
-  left: calc(13px + (var(--depth) * 18px));
+  left: calc(13px + (var(--depth) * var(--tree-indent-step)));
   top: 50%;
   width: 8px;
   height: 1px;
@@ -1277,50 +1423,20 @@ body.tree-open .file-tree-panel {
 .added { color: #42d17f; }
 .removed { color: #ff5f61; }
 .file-body {
-  padding: 0 6px 6px;
+  padding: 0 0 6px;
 }
 .hunk {
   margin-top: 6px;
-  border: 1px solid rgba(255,255,255,0.05);
-  border-radius: 4px;
-  overflow: auto;
-  background: var(--hunk-bg);
+  padding-top: 4px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
 }
-.hunk-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 8px;
-  background: rgba(29, 30, 34, 0.8);
-  color: var(--muted);
-  font-size: 10px;
-}
-.hunk-header-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.hunk-stage {
-  flex: none;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.05);
-  color: #929ba7;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.hunk-stage-working {
-  color: #7ee7a7;
-}
-.hunk-stage-index {
-  color: #9ec6ff;
-}
-.hunk-stage-both {
-  color: #c8ced6;
+.hunk:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 .diff-grid {
   display: block;
@@ -1408,62 +1524,50 @@ body.tree-open .file-tree-panel {
   color: #c0c5cc;
 }
 .context-group {
-  display: block;
+  display: flex;
+  flex-direction: column;
   position: relative;
-}
-.context-group > summary {
-  list-style: none;
-  cursor: pointer;
-  position: relative;
-  outline: none;
-}
-.context-group > summary::marker {
-  content: "";
-}
-.context-group > summary::-webkit-details-marker {
-  display: none;
 }
 .gap-line {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   position: relative;
   overflow: visible;
 }
-.gap-control {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
+.gap-edge-button {
   width: 30px;
-  min-height: 40px;
-  border-radius: 8px;
+  height: 20px;
+  border: 0;
   background: rgba(255,255,255,0.05);
   color: #8f99a5;
-  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+  font: inherit;
 }
-.row-gap:hover .gap-control,
-.context-group > summary:focus-visible .gap-control {
+.gap-edge-button:first-child {
+  border-radius: 8px 8px 0 0;
+}
+.gap-edge-button:last-child {
+  border-radius: 0 0 8px 8px;
+}
+.gap-edge-button:hover,
+.gap-edge-button:focus-visible {
   background: rgba(255,255,255,0.09);
   color: #c4ccd5;
-}
-.context-group[open] .gap-control {
-  transform: translateY(-1px);
+  outline: none;
 }
 .gap-control-icon {
   position: relative;
-  width: 12px;
-  height: 10px;
-}
-.gap-control-icon::before {
-  position: absolute;
-  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
+  height: 100%;
   font-size: 13px;
   line-height: 1;
+}
+.gap-control-icon::before {
+  content: "";
 }
 .gap-control-icon-up::before {
   content: "⌃";
@@ -1524,10 +1628,12 @@ body.tree-open .file-tree-panel {
 .row-gap:hover .code {
   background: rgba(255,255,255,0.04);
 }
-.gap-label {
-  min-width: 0;
-  color: #a7afb9;
-  font-size: 11px;
+.row-gap-boundary {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font: inherit;
 }
 .gap-action {
   flex: none;
@@ -1546,22 +1652,14 @@ body.tree-open .file-tree-panel {
 .row-gap:hover .gap-action {
   background: rgba(104, 156, 255, 0.18);
 }
-.context-group[open] .gap-action {
-  background: rgba(255,255,255,0.08);
-  color: #aeb7c4;
+.context-expand-row {
+  display: none;
 }
-.context-group[open] .gap-action::before {
-  content: attr(data-open-label);
-}
-.context-group:not([open]) .gap-action::before {
-  content: attr(data-closed-label);
-}
-.context-hidden {
+.context-expand-row.is-visible {
   display: block;
 }
-.context-group > summary:focus-visible .gap-action,
-.context-group > summary:focus-visible .code {
-  box-shadow: inset 0 0 0 1px rgba(104, 156, 255, 0.16);
+.row-gap-boundary .code {
+  justify-content: flex-start;
 }
 .filter-hidden {
   display: none !important;
@@ -1572,6 +1670,7 @@ body.tree-open .file-tree-panel {
 fn document_js() -> &'static str {
     r###"
 (function () {
+  const EXCERPT_CHUNK = 10;
   const KEYWORDS = {
     rust: new Set(["as","async","await","break","const","continue","crate","dyn","else","enum","extern","false","fn","for","if","impl","in","let","loop","match","mod","move","mut","pub","ref","return","self","Self","static","struct","super","trait","true","type","unsafe","use","where","while"]),
     js: new Set(["async","await","break","case","catch","class","const","continue","default","else","export","extends","false","finally","for","from","function","if","import","in","let","new","null","return","static","super","switch","this","throw","true","try","typeof","undefined","var","while","yield"]),
@@ -1762,10 +1861,12 @@ fn document_js() -> &'static str {
   const body = document.body;
   const treeButton = document.querySelector('[data-action="toggle-tree"]');
   const fullscreenButton = document.querySelector('[data-action="toggle-fullscreen"]');
+  const closeButton = document.querySelector('[data-action="close-diff"]');
   const filterInput = document.querySelector('[data-role="file-filter"]');
   const fileCards = Array.from(document.querySelectorAll('.file-card'));
   const treeFiles = Array.from(document.querySelectorAll('.tree-file'));
   const treeGroups = Array.from(document.querySelectorAll('.tree-group'));
+  const initialState = window.__NOT_TERMINAL_DIFF_INITIAL_STATE__ || null;
 
   function postNativeAction(action) {
     try {
@@ -1889,6 +1990,10 @@ fn document_js() -> &'static str {
     }
   }
 
+  function closeDiff() {
+    postNativeAction('toggle-diff-view');
+  }
+
   function applyFilter() {
     const term = (filterInput?.value || '').trim().toLowerCase();
 
@@ -1926,30 +2031,181 @@ fn document_js() -> &'static str {
     }
   }
 
+  function captureDiffState() {
+    const excerpts = Array.from(document.querySelectorAll('.context-group[data-excerpt-id]')).map((group) => ({
+      id: group.dataset.excerptId || "",
+      head: Number(group.dataset.excerptHead || 0),
+      tail: Number(group.dataset.excerptTail || 0),
+    }));
+
+    return JSON.stringify({
+      scrollY: window.scrollY,
+      treeOpen: body.classList.contains('tree-open'),
+      splitZoomed: fullscreenButton?.classList.contains('is-active') || false,
+      filterValue: filterInput?.value || "",
+      activeFile: body.dataset.activeFile || "",
+      openFiles: fileCards.filter((card) => card.open).map((card) => card.dataset.fileId || ""),
+      openTreeGroups: treeGroups.filter((group) => group.open).map((group) => group.dataset.treeId || ""),
+      excerpts,
+    });
+  }
+
+  function restoreDiffState(state) {
+    if (!state || typeof state !== 'object') return;
+
+    body.classList.toggle('tree-open', !!state.treeOpen);
+    fullscreenButton?.classList.toggle('is-active', !!state.splitZoomed);
+
+    if (filterInput && typeof state.filterValue === 'string') {
+      filterInput.value = state.filterValue;
+      applyFilter();
+    }
+
+    if (Array.isArray(state.openFiles)) {
+      const openFiles = new Set(state.openFiles);
+      fileCards.forEach((card) => {
+        card.open = openFiles.has(card.dataset.fileId || "");
+      });
+    }
+
+    if (Array.isArray(state.openTreeGroups)) {
+      const openTreeGroups = new Set(state.openTreeGroups);
+      treeGroups.forEach((group) => {
+        group.open = openTreeGroups.has(group.dataset.treeId || "");
+      });
+    }
+
+    const excerpts = Array.isArray(state.excerpts) ? state.excerpts : [];
+    excerpts.forEach((excerpt) => {
+      const group = Array.from(document.querySelectorAll('.context-group')).find(
+        (candidate) => candidate.dataset.excerptId === (excerpt.id || "")
+      );
+      if (!group) return;
+      group.dataset.excerptHead = String(Math.max(0, Number(excerpt.head || 0)));
+      group.dataset.excerptTail = String(Math.max(0, Number(excerpt.tail || 0)));
+      updateExcerpt(group);
+    });
+
+    if (typeof state.activeFile === 'string' && state.activeFile) {
+      setActiveFile(state.activeFile, { scroll: false, open: false });
+    }
+
+    if (Number.isFinite(state.scrollY)) {
+      window.scrollTo(0, Math.max(0, Number(state.scrollY)));
+    }
+
+    syncToolbar();
+    syncActiveFileFromScroll();
+  }
+
+  window.__NOT_TERMINAL_DIFF_CAPTURE_STATE__ = captureDiffState;
+
   treeButton?.addEventListener('click', toggleTree);
   fullscreenButton?.addEventListener('click', toggleFullscreen);
+  closeButton?.addEventListener('click', closeDiff);
   filterInput?.addEventListener('input', applyFilter);
   window.addEventListener('scroll', syncActiveFileFromScroll, { passive: true });
+  // Prevent ALL keyboard events from being handled by the webview so that
+  // keys (especially Space) don't scroll the diff page when the terminal
+  // should have focus.  Cmd+Shift+D is handled natively via
+  // performKeyEquivalent before the event reaches web content.
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Meta' && !event.shiftKey && !event.ctrlKey && !event.altKey) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
+    event.preventDefault();
+    event.stopPropagation();
   }, true);
   window.addEventListener('keyup', (event) => {
-    if (event.key === 'Meta' && !event.shiftKey && !event.ctrlKey && !event.altKey) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
+    event.preventDefault();
+    event.stopPropagation();
   }, true);
 
-  document.querySelectorAll('[data-role="context-toggle"]').forEach((summary) => {
-    summary.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && event.shiftKey) {
-        event.preventDefault();
-        summary.click();
+  function excerptRows(group) {
+    return Array.from(group.querySelectorAll('.context-expand-row'));
+  }
+
+  function initializeExcerpt(group) {
+    const total = excerptRows(group).length;
+    group.dataset.excerptHead = String(total);
+    group.dataset.excerptTail = '0';
+    updateExcerpt(group);
+  }
+
+  function updateExcerpt(group) {
+    const rows = excerptRows(group);
+    const total = rows.length;
+    let head = Math.min(Number(group.dataset.excerptHead || 0), total);
+    let tail = Math.min(Number(group.dataset.excerptTail || 0), Math.max(0, total - head));
+
+    if (head + tail > total) {
+      tail = Math.max(0, total - head);
+      group.dataset.excerptTail = String(tail);
+    }
+
+    const controls = group.querySelector('[data-role="excerpt-controls"]');
+    const topControl = group.querySelector('[data-role="excerpt-expand-top"]');
+    const bottomControl = group.querySelector('[data-role="excerpt-expand-bottom"]');
+
+    rows.forEach((row, index) => {
+      let visible = false;
+      let order = index;
+
+      if (index < head) {
+        visible = true;
+        order = index;
+      } else if (index >= total - tail) {
+        visible = true;
+        order = head + 1 + (index - (total - tail));
       }
+
+      row.classList.toggle('is-visible', visible);
+      row.style.order = String(order);
     });
+
+    if (controls) {
+      controls.style.order = String(head);
+    }
+
+    const remaining = Math.max(0, total - head - tail);
+    const nextTopChunk = Math.min(EXCERPT_CHUNK, remaining);
+    const nextBottomChunk = Math.min(EXCERPT_CHUNK, remaining);
+
+    controls?.classList.toggle('filter-hidden', remaining === 0);
+    topControl?.classList.toggle('filter-hidden', nextTopChunk === 0);
+    bottomControl?.classList.toggle('filter-hidden', nextBottomChunk === 0);
+    controls?.querySelector('[data-role="excerpt-label"]')?.replaceChildren(
+      document.createTextNode(`${remaining} unchanged lines`)
+    );
+  }
+
+  function expandExcerpt(group, side) {
+    const rows = excerptRows(group);
+    if (side === 'top') {
+      const head = Number(group.dataset.excerptHead || 0);
+      group.dataset.excerptHead = String(Math.min(rows.length, head + EXCERPT_CHUNK));
+    } else {
+      const tail = Number(group.dataset.excerptTail || 0);
+      group.dataset.excerptTail = String(Math.min(rows.length, tail + EXCERPT_CHUNK));
+    }
+    updateExcerpt(group);
+  }
+
+  document.querySelectorAll('[data-role="excerpt-expand-top"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const group = button.closest('.context-group');
+      if (!group) return;
+      expandExcerpt(group, 'top');
+    });
+  });
+
+  document.querySelectorAll('[data-role="excerpt-expand-bottom"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const group = button.closest('.context-group');
+      if (!group) return;
+      expandExcerpt(group, 'bottom');
+    });
+  });
+
+  document.querySelectorAll('.context-group').forEach((group) => {
+    initializeExcerpt(group);
   });
 
   fileCards.forEach((card) => {
@@ -1973,8 +2229,12 @@ fn document_js() -> &'static str {
   if (preferred) {
     setActiveFile(preferred.dataset.fileId || '', { scroll: false });
   }
-  syncActiveFileFromScroll();
-  syncToolbar();
+  if (initialState) {
+    restoreDiffState(initialState);
+  } else {
+    syncActiveFileFromScroll();
+    syncToolbar();
+  }
 })();
 "###
 }
@@ -1985,6 +2245,10 @@ fn tree_icon() -> &'static str {
 
 fn fullscreen_icon() -> &'static str {
     r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5H4.5V8"></path><path d="M16 4.5h3.5V8"></path><path d="M8 19.5H4.5V16"></path><path d="M16 19.5h3.5V16"></path></svg>"#
+}
+
+fn close_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10"></path><path d="M17 7L7 17"></path></svg>"#
 }
 
 fn folder_icon() -> &'static str {
