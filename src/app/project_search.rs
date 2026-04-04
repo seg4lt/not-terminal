@@ -1,14 +1,40 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
+
+/// Resolve the `rg` binary path.
+///
+/// macOS GUI apps inherit a minimal PATH that usually excludes Homebrew
+/// directories, so a bare `Command::new("rg")` fails. We probe well-known
+/// install locations and fall back to the bare name (which still works when
+/// PATH does include it, e.g. during development in a terminal).
+fn find_rg() -> &'static OsStr {
+    static RG: OnceLock<PathBuf> = OnceLock::new();
+    RG.get_or_init(|| {
+        let candidates: &[&str] = &[
+            "/opt/homebrew/bin/rg",  // Apple Silicon Homebrew
+            "/usr/local/bin/rg",     // Intel Homebrew / manual install
+            "/run/current-system/sw/bin/rg", // NixOS / nix-darwin
+        ];
+        for path in candidates {
+            if Path::new(path).is_file() {
+                return PathBuf::from(path);
+            }
+        }
+        // Fall back to bare name; will succeed if PATH already contains rg.
+        PathBuf::from("rg")
+    })
+    .as_os_str()
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ProjectSearchRange {
@@ -294,7 +320,7 @@ fn browse_files(
     worktree_path: &str,
     options: &ProjectSearchOptions,
 ) -> Result<ProjectSearchResponse, String> {
-    let mut command = Command::new("rg");
+    let mut command = Command::new(find_rg());
     command.current_dir(worktree_path);
     command.args(["--files", "--hidden"]);
     if options.include_gitignored {
@@ -471,7 +497,7 @@ fn parse_rg_json_line(line: &str) -> Option<(String, ProjectSearchMatch)> {
 }
 
 fn rg_search_command(worktree_path: &str, query: &str, options: &ProjectSearchOptions) -> Command {
-    let mut command = Command::new("rg");
+    let mut command = Command::new(find_rg());
     command.current_dir(worktree_path);
     command.args(["--json", "--line-number", "--hidden"]);
     command.args(["--glob", "!.git"]);
