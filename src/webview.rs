@@ -22,8 +22,10 @@ unsafe extern "C" {
     fn webview_get_title(webview_ptr: *mut ()) -> *mut i8;
     fn webview_open_dev_tools(webview_ptr: *mut ());
     fn webview_take_action(webview_ptr: *mut ()) -> *mut i8;
+    fn webview_evaluate_javascript(webview_ptr: *mut (), script_cstr: *const i8) -> *mut i8;
     #[allow(dead_code)]
     fn webview_lose_focus(webview_ptr: *mut ());
+    fn webview_set_keyboard_enabled(webview_ptr: *mut (), enabled: bool);
     #[allow(dead_code)]
     fn free(ptr: *mut std::ffi::c_void);
 }
@@ -175,11 +177,37 @@ impl WebView {
         }
     }
 
+    /// Evaluate JavaScript in the hosted page and return the string result.
+    pub fn evaluate_javascript(&self, script: &str) -> Option<String> {
+        let Ok(script_cstr) = std::ffi::CString::new(script) else {
+            return None;
+        };
+        unsafe {
+            let ptr = webview_evaluate_javascript(self.ptr.as_ptr(), script_cstr.as_ptr());
+            if ptr.is_null() {
+                return None;
+            }
+            let cstr = CStr::from_ptr(ptr);
+            let result = cstr.to_string_lossy().to_string();
+            free(ptr as *mut std::ffi::c_void);
+            Some(result)
+        }
+    }
+
     /// Make the webview lose focus
     #[allow(dead_code)]
     pub fn lose_focus(&self) {
         unsafe {
             webview_lose_focus(self.ptr.as_ptr());
+        }
+    }
+
+    /// Enable or disable keyboard focus for this webview.
+    /// When disabled, the WKWebView refuses first responder and won't capture
+    /// keyboard events — useful for read-only panes like the diff view.
+    pub fn set_keyboard_enabled(&self, enabled: bool) {
+        unsafe {
+            webview_set_keyboard_enabled(self.ptr.as_ptr(), enabled);
         }
     }
 }

@@ -2137,6 +2137,10 @@ impl App {
             return Err(String::from("failed to create diff webview"));
         };
 
+        // Diff panes are read-only; prevent the WKWebView from stealing
+        // keyboard focus away from the terminal.
+        webview.set_keyboard_enabled(false);
+
         Ok(DiffPaneRuntime::new(
             create_id("diff"),
             webview,

@@ -24,10 +24,18 @@ typedef struct rust_webview_s {
 
 @interface KeyboardCapableWKWebView : WKWebView
 @property(nonatomic, assign) rust_webview_t *rustWrapper;
+@property(nonatomic, assign) BOOL keyboardEnabled;
 @end
 @implementation KeyboardCapableWKWebView
+- (instancetype)initWithFrame:(NSRect)frame configuration:(WKWebViewConfiguration *)config {
+    self = [super initWithFrame:frame configuration:config];
+    if (self) {
+        _keyboardEnabled = YES;
+    }
+    return self;
+}
 - (BOOL)acceptsFirstResponder {
-    return YES;
+    return self.keyboardEnabled;
 }
 - (BOOL)becomeFirstResponder {
     return [super becomeFirstResponder];
@@ -510,6 +518,85 @@ char *webview_take_action(void *webview_ptr) {
     char *result = wrapper->pending_action;
     wrapper->pending_action = NULL;
     return result;
+}
+
+char *webview_evaluate_javascript(void *webview_ptr, const char *script_cstr) {
+    if (webview_ptr == NULL || script_cstr == NULL) {
+        return NULL;
+    }
+
+    rust_webview_t *wrapper = (rust_webview_t *)webview_ptr;
+    if (wrapper->webview == nil) {
+        return NULL;
+    }
+
+    NSString *script = [NSString stringWithUTF8String:script_cstr];
+    if (script == nil) {
+        return NULL;
+    }
+
+    __block NSString *resultString = nil;
+    __block BOOL finished = NO;
+
+    [wrapper->webview evaluateJavaScript:script
+                       completionHandler:^(id result, NSError *error) {
+                           if (error == nil && result != nil) {
+                               if ([result isKindOfClass:[NSString class]]) {
+                                   resultString = [(NSString *)result copy];
+                               } else {
+                                   resultString = [[result description] copy];
+                               }
+                           }
+                           finished = YES;
+                       }];
+
+    while (!finished) {
+        @autoreleasepool {
+            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                     beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+        }
+    }
+
+    if (resultString == nil) {
+        return NULL;
+    }
+
+    const char *cstr = [resultString UTF8String];
+    if (cstr == NULL) {
+        [resultString release];
+        return NULL;
+    }
+
+    size_t len = strlen(cstr);
+    char *copy = (char *)malloc(len + 1);
+    if (copy != NULL) {
+        memcpy(copy, cstr, len + 1);
+    }
+    [resultString release];
+    return copy;
+}
+
+// Enable or disable keyboard focus for the webview.
+// When disabled, the WKWebView refuses first responder and won't capture keys.
+void webview_set_keyboard_enabled(void *webview_ptr, bool enabled) {
+    if (webview_ptr == NULL) {
+        return;
+    }
+
+    rust_webview_t *wrapper = (rust_webview_t *)webview_ptr;
+    if (wrapper->webview == nil) {
+        return;
+    }
+
+    [(KeyboardCapableWKWebView *)wrapper->webview setKeyboardEnabled:enabled ? YES : NO];
+
+    // If disabling, resign first responder immediately so the terminal can reclaim it.
+    if (!enabled) {
+        NSWindow *window = [wrapper->webview window];
+        if (window != nil && [window firstResponder] == wrapper->webview) {
+            [window makeFirstResponder:nil];
+        }
+    }
 }
 
 // Make the webview lose focus (so keyboard input doesn't go to it)
