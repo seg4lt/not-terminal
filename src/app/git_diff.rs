@@ -1540,12 +1540,13 @@ body.tree-open .file-tree-panel {
 }
 .row .line,
 .row .code {
-  padding: 3px 10px;
+  padding: 0 10px;
 }
 .row .line {
   color: #7f8791;
   text-align: right;
   border-right: 1px solid rgba(55, 57, 62, 0.65);
+  line-height: 24px;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -1568,9 +1569,33 @@ body.tree-open .file-tree-panel {
   border-left: 4px solid var(--red-edge);
 }
 .row .code {
+  display: flex;
+  align-items: center;
+  position: relative;
   white-space: pre;
+  line-height: 24px;
   word-break: normal;
   overflow-wrap: normal;
+}
+.row .code > * {
+  position: relative;
+  z-index: 1;
+}
+.code-content,
+.code-content * {
+  line-height: inherit;
+}
+.row .code::selection,
+.row .code *::selection {
+  background: transparent;
+  color: inherit;
+}
+.row.row-selected .code::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(92, 146, 214, 0.58);
+  pointer-events: none;
 }
 .inline-diff {
   border-radius: 3px;
@@ -2336,6 +2361,46 @@ fn document_js() -> &'static str {
 
   window.__NOT_TERMINAL_DIFF_CAPTURE_STATE__ = captureDiffState;
 
+  const diffRows = Array.from(document.querySelectorAll('.row'));
+
+  function clearRowSelection() {
+    diffRows.forEach((row) => {
+      row.classList.remove('row-selected');
+    });
+  }
+
+  function syncCustomSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed || !body.contains(selection.anchorNode)) {
+      clearRowSelection();
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const selectedRows = [];
+
+    diffRows.forEach((row) => {
+      const code = row.querySelector('.code');
+      if (!code) return;
+
+      let intersects = false;
+      try {
+        intersects = range.intersectsNode(code);
+      } catch (_error) {
+        intersects = false;
+      }
+
+      row.classList.toggle('row-selected', intersects);
+      if (intersects) {
+        selectedRows.push(row);
+      }
+    });
+
+    if (selectedRows.length === 0) {
+      clearRowSelection();
+    }
+  }
+
   treeButton?.addEventListener('click', toggleTree);
   prevFileButton?.addEventListener('click', () => moveFile(-1));
   nextFileButton?.addEventListener('click', () => moveFile(1));
@@ -2346,17 +2411,36 @@ fn document_js() -> &'static str {
   closeButton?.addEventListener('click', closeDiff);
   filterInput?.addEventListener('input', applyFilter);
   window.addEventListener('scroll', syncActiveFileFromScroll, { passive: true });
-  // Prevent ALL keyboard events from being handled by the webview so that
-  // keys (especially Space) don't scroll the diff page when the terminal
-  // should have focus.  Cmd+Shift+D is handled natively via
-  // performKeyEquivalent before the event reaches web content.
+  document.addEventListener('selectionchange', syncCustomSelection);
+
+  function isEditableTarget(target) {
+    if (!(target instanceof Element)) return false;
+    return target.closest('input, textarea, [contenteditable="true"], [contenteditable=""], [role="textbox"]') !== null;
+  }
+
+  // Only suppress the browser-style keys that cause the diff page to jump or
+  // scroll unexpectedly. Command shortcuts like Cmd+C/Cmd+A/Cmd+Shift+D should
+  // keep flowing through to AppKit/webview handling.
   window.addEventListener('keydown', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  }, true);
-  window.addEventListener('keyup', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
+    if (event.metaKey || event.ctrlKey || event.altKey) {
+      return;
+    }
+    if (isEditableTarget(event.target)) {
+      return;
+    }
+
+    const key = event.key;
+    const shouldBlockScrollKey =
+      key === ' ' ||
+      key === 'PageUp' ||
+      key === 'PageDown' ||
+      key === 'Home' ||
+      key === 'End';
+
+    if (shouldBlockScrollKey) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   }, true);
 
   function excerptRows(group) {

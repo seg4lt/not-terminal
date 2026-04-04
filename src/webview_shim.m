@@ -44,6 +44,58 @@ static bool rust_webview_contains_view(rust_webview_t *wrapper, NSView *view) {
     return view == wrapper->webview || [view isDescendantOf:wrapper->webview];
 }
 
+static NSString *rust_webview_evaluate_sync(rust_webview_t *wrapper, NSString *script) {
+    if (wrapper == NULL || wrapper->webview == nil || script == nil) {
+        return nil;
+    }
+
+    __block NSString *resultString = nil;
+    __block BOOL finished = NO;
+
+    [wrapper->webview evaluateJavaScript:script
+                       completionHandler:^(id result, NSError *error) {
+                           if (error == nil && result != nil) {
+                               if ([result isKindOfClass:[NSString class]]) {
+                                   resultString = [(NSString *)result copy];
+                               } else {
+                                   resultString = [[result description] copy];
+                               }
+                           }
+                           finished = YES;
+                       }];
+
+    while (!finished) {
+        @autoreleasepool {
+            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                     beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+        }
+    }
+
+    return resultString;
+}
+
+static bool rust_webview_copy_selection_to_pasteboard(rust_webview_t *wrapper) {
+    NSString *selectedText = rust_webview_evaluate_sync(
+        wrapper,
+        @"window.getSelection ? window.getSelection().toString() : '';");
+    if (selectedText == nil) {
+        return false;
+    }
+
+    NSString *trimmed =
+        [selectedText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed == nil || [trimmed length] == 0) {
+        [selectedText release];
+        return false;
+    }
+
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    BOOL wrote = [pasteboard setString:selectedText forType:NSPasteboardTypeString];
+    [selectedText release];
+    return wrote == YES;
+}
+
 static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
     if (wrapper == NULL || wrapper->webview == nil) {
         return;
@@ -182,6 +234,10 @@ static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
             action = "diff-font-decrease";
         } else if ([characters isEqualToString:@"0"]) {
             action = "diff-font-reset";
+        } else if ([characters isEqualToString:@"c"]) {
+            if (rust_webview_copy_selection_to_pasteboard(self.rustWrapper)) {
+                return YES;
+            }
         }
 
         if (action != NULL) {
@@ -718,28 +774,7 @@ char *webview_evaluate_javascript(void *webview_ptr, const char *script_cstr) {
         return NULL;
     }
 
-    __block NSString *resultString = nil;
-    __block BOOL finished = NO;
-
-    [wrapper->webview evaluateJavaScript:script
-                       completionHandler:^(id result, NSError *error) {
-                           if (error == nil && result != nil) {
-                               if ([result isKindOfClass:[NSString class]]) {
-                                   resultString = [(NSString *)result copy];
-                               } else {
-                                   resultString = [[result description] copy];
-                               }
-                           }
-                           finished = YES;
-                       }];
-
-    while (!finished) {
-        @autoreleasepool {
-            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                     beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
-        }
-    }
-
+    NSString *resultString = rust_webview_evaluate_sync(wrapper, script);
     if (resultString == nil) {
         return NULL;
     }
