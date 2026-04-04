@@ -1292,6 +1292,21 @@ void rust_ghostty_host_view_set_hidden(void *host_ns_view, bool hidden) {
       rust_ghostty_search_overlay_controller(host, false);
   if (hidden) {
     [controller deactivate];
+
+    // macOS does not automatically resign first responder when a view is
+    // hidden.  If the terminal surface (or any child) still holds it, keyboard
+    // events will be consumed by the hidden view instead of reaching the Iced
+    // widget tree (e.g. a modal text input opened with Cmd+P).
+    NSWindow *window = [host window];
+    if (window != nil) {
+      NSResponder *fr = [window firstResponder];
+      if ([fr isKindOfClass:[NSView class]]) {
+        NSView *frView = (NSView *)fr;
+        if (frView == host || [frView isDescendantOf:host]) {
+          [window makeFirstResponder:[window contentView]];
+        }
+      }
+    }
   } else {
     [controller syncFrame];
   }
