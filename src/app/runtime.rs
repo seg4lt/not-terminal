@@ -619,8 +619,7 @@ impl RuntimeSession {
             return false;
         };
 
-        pane.webview.load_html(html);
-        true
+        pane.update_html(html)
     }
 
     pub(crate) fn goto_split_from_surface(

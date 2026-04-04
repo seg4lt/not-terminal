@@ -2,6 +2,12 @@
 
 Experimental macOS app that embeds Ghostty inside an Iced UI.
 
+
+ssadf
+asdf
+asdf
+123
+
 ## What it does
 
 - Sidebar for projects, worktrees, and terminals
