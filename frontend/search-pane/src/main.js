@@ -16,7 +16,7 @@ root.innerHTML = `
     </div>
     <label class="toolbar-search">
       <span class="toolbar-search-icon">${iconSearch()}</span>
-      <input id="project-search-input" type="search" placeholder="Search the project" spellcheck="false" autocomplete="off" data-role="search-input">
+      <input id="project-search-input" type="search" placeholder="Search the project (regex)" spellcheck="false" autocomplete="off" data-role="search-input">
     </label>
     <div class="toolbar-actions">
       <button class="toolbar-btn" type="button" data-action="prev-match" title="Previous match" aria-label="Previous match">${iconChevronUp()}</button>
@@ -106,6 +106,19 @@ let previewRenderToken = 0;
 function postAction(action) {
   if (!handler) return;
   handler.postMessage(typeof action === "string" ? action : JSON.stringify(action));
+}
+
+function beginTextInput(target) {
+  postAction("enable-text-input");
+  window.setTimeout(() => {
+    if (target && typeof target.focus === "function") {
+      target.focus();
+    }
+  }, 0);
+}
+
+function endTextInput() {
+  postAction("disable-text-input");
 }
 
 function queueTreeRender() {
@@ -585,12 +598,35 @@ function previewShellStyles() {
       color: #8c94a5;
       border-right: 1px solid rgba(255,255,255,0.08);
       background: rgba(255,255,255,0.01);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .preview-row [data-column-number]::selection,
+    .preview-row [data-column-number] *::selection {
+      background: transparent;
     }
     .preview-row [data-line],
     .preview-gap-main,
     .preview-spacer-main {
       min-width: 0;
       white-space: pre;
+      position: relative;
+    }
+    .preview-row [data-line] > * {
+      position: relative;
+      z-index: 1;
+    }
+    .preview-row [data-line]::selection,
+    .preview-row [data-line] *::selection {
+      background: transparent;
+      color: inherit;
+    }
+    .preview-row.is-row-selected [data-line]::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: rgba(92, 146, 214, 0.58);
+      pointer-events: none;
     }
     .preview-gap-gutter,
     .preview-gap-main {
@@ -667,6 +703,7 @@ function setPreviewMarkup(markup) {
     <style>${previewShellStyles()}</style>
     ${markup}
   `;
+  syncPreviewSelection();
 }
 
 function renderRowsMarkup(rows, activeLine) {
@@ -837,6 +874,55 @@ function renderFullFileViewport() {
   previewMode = "full-file";
 }
 
+function clearPreviewSelection() {
+  const previewRoot = getPreviewRoot();
+  if (!previewRoot) return;
+  for (const row of previewRoot.querySelectorAll(".preview-row.is-row-selected")) {
+    row.classList.remove("is-row-selected");
+  }
+}
+
+function syncPreviewSelection() {
+  const previewRoot = getPreviewRoot();
+  const selection = window.getSelection();
+  if (!previewRoot || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    clearPreviewSelection();
+    return;
+  }
+
+  const anchorNode = selection.anchorNode;
+  if (!(anchorNode instanceof Node) || anchorNode.getRootNode() !== previewRoot) {
+    clearPreviewSelection();
+    return;
+  }
+
+  const range = selection.getRangeAt(0);
+  let selectedRows = 0;
+  for (const row of previewRoot.querySelectorAll(".preview-row")) {
+    const code = row.querySelector("[data-line]");
+    if (!code) {
+      row.classList.remove("is-row-selected");
+      continue;
+    }
+
+    let intersects = false;
+    try {
+      intersects = range.intersectsNode(code);
+    } catch (_error) {
+      intersects = false;
+    }
+
+    row.classList.toggle("is-row-selected", intersects);
+    if (intersects) {
+      selectedRows += 1;
+    }
+  }
+
+  if (selectedRows === 0) {
+    clearPreviewSelection();
+  }
+}
+
 function applyActiveLineSelection() {
   const activeMatch = getActiveMatch();
   const previewRoot = getPreviewRoot();
@@ -949,7 +1035,7 @@ async function renderPreview() {
 }
 
 function setResults(payload) {
-  state.loading = false;
+  state.loading = !!(payload && payload.loading);
   state.error = payload && payload.error ? payload.error : "";
   state.results = payload || { files: [], total_files: 0, total_matches: 0, truncated: false };
 
@@ -1054,7 +1140,7 @@ function handleSearchInput() {
   state.queryDebounce = window.setTimeout(() => {
     postAction({ type: "query-changed", query: value });
     setLoading({ query: value });
-  }, 75);
+  }, 180);
 }
 
 function getPreviewLineElement(event) {
@@ -1110,11 +1196,12 @@ function handlePreviewDoubleClick(event) {
 }
 
 function bindTextInputFocus(input) {
-  input.addEventListener("focus", () => postAction("enable-text-input"));
+  input.addEventListener("mousedown", () => beginTextInput(input));
+  input.addEventListener("focus", () => beginTextInput(input));
   input.addEventListener("blur", () => {
     window.setTimeout(() => {
       if (document.activeElement !== input) {
-        postAction("disable-text-input");
+        endTextInput();
       }
     }, 0);
   });
@@ -1127,7 +1214,14 @@ previewScroll.addEventListener("scroll", queuePreviewRender);
 previewSurface.addEventListener("click", handlePreviewClick);
 previewSurface.addEventListener("dblclick", handlePreviewDoubleClick);
 searchInput.addEventListener("input", handleSearchInput);
+searchInput.addEventListener("keydown", (event) => {
+  if (event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === "a") {
+    event.preventDefault();
+    searchInput.select();
+  }
+});
 bindTextInputFocus(searchInput);
+document.addEventListener("selectionchange", syncPreviewSelection);
 window.addEventListener("resize", () => {
   queueTreeRender();
   requestAnimationFrame(scrollPreviewToActiveMatch);

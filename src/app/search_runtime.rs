@@ -150,8 +150,24 @@ impl SearchPaneRuntime {
     }
 
     pub(crate) fn set_results(&mut self, response: &ProjectSearchResponse) {
+        self.set_results_with_loading(response, false);
+    }
+
+    pub(crate) fn set_results_loading(&mut self, response: &ProjectSearchResponse) {
+        self.set_results_with_loading(response, true);
+    }
+
+    fn set_results_with_loading(&mut self, response: &ProjectSearchResponse, loading: bool) {
         self.files = response.files.clone();
-        self.invoke_json_function("window.__NOT_TERMINAL_SEARCH_SET_RESULTS__", response);
+        let payload = serde_json::json!({
+            "query": &response.query,
+            "total_files": response.total_files,
+            "total_matches": response.total_matches,
+            "truncated": response.truncated,
+            "files": &response.files,
+            "loading": loading,
+        });
+        self.invoke_json_function("window.__NOT_TERMINAL_SEARCH_SET_RESULTS__", &payload);
         if response.files.is_empty() {
             self.clear_preview();
         }

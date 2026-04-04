@@ -6,7 +6,7 @@ use crate::app::search_runtime::SearchPaneAction;
 use crate::app::shortcuts::ShortcutAction;
 use crate::app::state::{
     AddProjectOutcome, COMMAND_PALETTE_SCROLL_ID, CommandPaletteAction, ProjectRescanSummary,
-    QUICK_OPEN_SCROLL_ID, QuickOpenEntry, QuickOpenEntryKind,
+    ProjectSearchJob, QUICK_OPEN_SCROLL_ID, QuickOpenEntry, QuickOpenEntryKind,
 };
 use crate::ghostty_embed::{
     disable_system_hide_shortcuts, host_view_focus_search, host_view_focus_terminal,
@@ -16,10 +16,12 @@ use iced::{Task, keyboard, widget::operation, window};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod browser;
 mod input;
+
+const PROJECT_SEARCH_PROGRESS_DEBOUNCE: Duration = Duration::from_millis(120);
 
 fn rescan_status(summary: &ProjectRescanSummary, startup: bool) -> String {
     if summary.total_projects == 0 {
@@ -218,9 +220,11 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
             let search_applied = app.apply_terminal_search_if_due(now);
             let diff_action_changed = app.process_diff_pane_actions();
+            let search_job_changed = process_project_search_jobs(app);
             let (search_action_changed, search_action_task) = process_search_pane_actions(app);
             if app.process_runtime_actions()
                 || diff_action_changed
+                || search_job_changed
                 || search_action_changed
                 || layout_changed
             {
@@ -627,33 +631,6 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
         }
         Message::ToggleProjectSearchView => toggle_project_search_view(app),
-        Message::ProjectSearchResultsLoaded {
-            request_id,
-            terminal_id,
-            worktree_path,
-            query,
-            result,
-        } => {
-            let Some(runtime) = app.runtimes.get_mut(&terminal_id) else {
-                return Task::none();
-            };
-            let Some(search_pane) = runtime.search_pane_mut_for_worktree(&worktree_path) else {
-                return Task::none();
-            };
-            if !search_pane.matches_query_response(request_id, &query) {
-                return Task::none();
-            }
-            match result {
-                Ok(results) => {
-                    search_pane.set_results(&results);
-                }
-                Err(error) => {
-                    search_pane.set_error(&query, &error);
-                    app.status = format!("Project search failed: {error}");
-                }
-            }
-            Task::none()
-        }
         Message::ProjectSearchPreviewLoaded {
             request_id,
             terminal_id,
@@ -1731,6 +1708,7 @@ fn process_search_pane_actions(app: &mut App) -> (bool, Task<Message>) {
                 .get_mut(&terminal_id)
                 .is_some_and(|runtime| runtime.toggle_split_zoom_for_pane(&pane_id)),
             SearchPaneAction::ToggleProjectSearchView => {
+                cancel_project_search_job(app, &terminal_id);
                 let changed = app
                     .runtimes
                     .get_mut(&terminal_id)
@@ -1744,6 +1722,7 @@ fn process_search_pane_actions(app: &mut App) -> (bool, Task<Message>) {
                 changed
             }
             SearchPaneAction::QueryChanged(query) => {
+                cancel_project_search_job(app, &terminal_id);
                 if let Some(runtime) = app.runtimes.get_mut(&terminal_id)
                     && let Some(worktree_path) = runtime.search_worktree_path()
                     && let Some(search_pane) = runtime.search_pane_mut_for_worktree(&worktree_path)
@@ -1754,12 +1733,20 @@ fn process_search_pane_actions(app: &mut App) -> (bool, Task<Message>) {
                     if trimmed.is_empty() {
                         search_pane.clear_results(&trimmed);
                     } else {
-                        tasks.push(load_project_search_task(
+                        app.project_search_jobs.insert(
                             terminal_id.clone(),
-                            worktree_path,
-                            request_id,
-                            trimmed,
-                        ));
+                            ProjectSearchJob {
+                                worktree_path: worktree_path.clone(),
+                                request_id,
+                                query: trimmed.clone(),
+                                stream: project_search::start_search_stream(
+                                    worktree_path.clone(),
+                                    trimmed,
+                                ),
+                                pending_progress: None,
+                                pending_progress_deadline: None,
+                            },
+                        );
                     }
                 }
                 false
@@ -1849,26 +1836,114 @@ fn load_diff_task(terminal_id: String, worktree_path: String) -> Task<Message> {
     )
 }
 
-fn load_project_search_task(
-    terminal_id: String,
-    worktree_path: String,
-    request_id: u64,
-    query: String,
-) -> Task<Message> {
-    Task::perform(
-        {
-            let worktree_path = worktree_path.clone();
-            let query = query.clone();
-            async move { project_search::search(&worktree_path, &query) }
-        },
-        move |result| Message::ProjectSearchResultsLoaded {
-            request_id,
-            terminal_id,
-            worktree_path,
-            query,
-            result,
-        },
-    )
+fn cancel_project_search_job(app: &mut App, terminal_id: &str) {
+    if let Some(job) = app.project_search_jobs.remove(terminal_id) {
+        job.stream.cancel();
+    }
+}
+
+fn process_project_search_jobs(app: &mut App) -> bool {
+    let terminal_ids = app.project_search_jobs.keys().cloned().collect::<Vec<_>>();
+    let mut changed = false;
+    let mut finished = Vec::new();
+    let now = Instant::now();
+
+    for terminal_id in terminal_ids {
+        let (request_id, worktree_path, query, apply_progress_now) = {
+            let Some(job) = app.project_search_jobs.get_mut(&terminal_id) else {
+                continue;
+            };
+
+            let update = job.stream.take_update();
+            let apply_progress_now = match update {
+                Some(project_search::SearchStreamUpdate::Progress(response)) => {
+                    job.pending_progress = Some(response);
+                    job.pending_progress_deadline = Some(now + PROJECT_SEARCH_PROGRESS_DEBOUNCE);
+                    job.pending_progress_deadline
+                        .filter(|deadline| *deadline <= now)
+                        .and_then(|_| {
+                            job.pending_progress_deadline = None;
+                            job.pending_progress
+                                .take()
+                                .map(project_search::SearchStreamUpdate::Progress)
+                        })
+                }
+                Some(project_search::SearchStreamUpdate::Complete(result)) => {
+                    job.pending_progress = None;
+                    job.pending_progress_deadline = None;
+                    Some(project_search::SearchStreamUpdate::Complete(result))
+                }
+                None => job
+                    .pending_progress_deadline
+                    .filter(|deadline| *deadline <= now)
+                    .and_then(|_| {
+                        job.pending_progress_deadline = None;
+                        job.pending_progress
+                            .take()
+                            .map(project_search::SearchStreamUpdate::Progress)
+                    }),
+            };
+
+            (
+                job.request_id,
+                job.worktree_path.clone(),
+                job.query.clone(),
+                apply_progress_now,
+            )
+        };
+
+        let pane_available = app
+            .runtimes
+            .get(&terminal_id)
+            .and_then(|runtime| runtime.search_worktree_path())
+            .as_deref()
+            == Some(worktree_path.as_str());
+        if !pane_available {
+            finished.push(terminal_id);
+            continue;
+        }
+
+        let Some(update_to_apply) = apply_progress_now else {
+            continue;
+        };
+
+        let Some(runtime) = app.runtimes.get_mut(&terminal_id) else {
+            finished.push(terminal_id);
+            continue;
+        };
+        let Some(search_pane) = runtime.search_pane_mut_for_worktree(&worktree_path) else {
+            finished.push(terminal_id);
+            continue;
+        };
+        if !search_pane.matches_query_response(request_id, &query) {
+            finished.push(terminal_id);
+            continue;
+        }
+
+        match update_to_apply {
+            project_search::SearchStreamUpdate::Progress(response) => {
+                search_pane.set_results_loading(&response);
+                changed = true;
+            }
+            project_search::SearchStreamUpdate::Complete(result) => {
+                match result {
+                    Ok(results) => search_pane.set_results(&results),
+                    Err(error) => {
+                        search_pane.set_error(&query, &error);
+                        app.status = format!("Project search failed: {error}");
+                    }
+                }
+                finished.push(terminal_id);
+                changed = true;
+            }
+        }
+    }
+
+    for terminal_id in finished {
+        cancel_project_search_job(app, &terminal_id);
+    }
+
+    changed
 }
 
 fn load_project_search_preview_task(

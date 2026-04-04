@@ -4,7 +4,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ProjectSearchRange {
@@ -52,6 +56,23 @@ pub(crate) struct ProjectSearchPreview {
 }
 
 const MAX_MATCHES: usize = 4_000;
+const STREAM_EMIT_MATCH_INTERVAL: usize = 256;
+
+pub(crate) enum SearchStreamUpdate {
+    Progress(ProjectSearchResponse),
+    Complete(Result<ProjectSearchResponse, String>),
+}
+
+enum SearchWorkerMessage {
+    Progress(ProjectSearchResponse),
+    Complete(Result<ProjectSearchResponse, String>),
+}
+
+pub(crate) struct SearchStream {
+    rx: Receiver<SearchWorkerMessage>,
+    cancelled: Arc<AtomicBool>,
+    child: Arc<Mutex<Option<Child>>>,
+}
 
 pub(crate) fn empty_response(query: &str) -> ProjectSearchResponse {
     ProjectSearchResponse {
@@ -63,26 +84,14 @@ pub(crate) fn empty_response(query: &str) -> ProjectSearchResponse {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn search(worktree_path: &str, query: &str) -> Result<ProjectSearchResponse, String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return browse_files(worktree_path);
     }
 
-    let mut child = Command::new("rg")
-        .current_dir(worktree_path)
-        .args([
-            "--json",
-            "--line-number",
-            "--smart-case",
-            "--hidden",
-            "--glob",
-            "!.git",
-            trimmed,
-            ".",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut child = rg_search_command(worktree_path, trimmed)
         .spawn()
         .map_err(|error| format!("failed to run rg: {error}"))?;
 
@@ -143,6 +152,131 @@ pub(crate) fn search(worktree_path: &str, query: &str) -> Result<ProjectSearchRe
     })
 }
 
+pub(crate) fn start_search_stream(worktree_path: String, query: String) -> SearchStream {
+    let (tx, rx) = mpsc::channel();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let child = Arc::new(Mutex::new(None));
+    let worker_cancelled = Arc::clone(&cancelled);
+    let worker_child = Arc::clone(&child);
+
+    thread::spawn(move || {
+        let trimmed = query.trim().to_string();
+        if trimmed.is_empty() {
+            let _ = tx.send(SearchWorkerMessage::Complete(browse_files(&worktree_path)));
+            return;
+        }
+
+        let mut child = match rg_search_command(&worktree_path, &trimmed).spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = tx.send(SearchWorkerMessage::Complete(Err(format!(
+                    "failed to run rg: {error}"
+                ))));
+                return;
+            }
+        };
+
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                let _ = tx.send(SearchWorkerMessage::Complete(Err(String::from(
+                    "failed to capture rg stdout",
+                ))));
+                return;
+            }
+        };
+
+        if let Ok(mut slot) = worker_child.lock() {
+            *slot = Some(child);
+        }
+
+        let mut grouped = BTreeMap::<String, Vec<ProjectSearchMatch>>::new();
+        let mut total_matches = 0usize;
+        let mut truncated = false;
+        let mut last_emitted_matches = 0usize;
+        let reader = BufReader::new(stdout);
+
+        for line_result in reader.lines() {
+            if worker_cancelled.load(Ordering::Relaxed) {
+                kill_stream_child(&worker_child);
+                return;
+            }
+
+            let line = match line_result {
+                Ok(line) => line,
+                Err(error) => {
+                    let _ = tx.send(SearchWorkerMessage::Complete(Err(format!(
+                        "failed to read rg output: {error}"
+                    ))));
+                    kill_stream_child(&worker_child);
+                    return;
+                }
+            };
+
+            let Some((path, entry)) = parse_rg_json_line(&line) else {
+                continue;
+            };
+
+            grouped.entry(path).or_default().push(entry);
+            total_matches += 1;
+
+            if total_matches >= MAX_MATCHES {
+                truncated = true;
+                kill_stream_child(&worker_child);
+                break;
+            }
+
+            let should_emit = total_matches == 1
+                || total_matches.saturating_sub(last_emitted_matches) >= STREAM_EMIT_MATCH_INTERVAL;
+            if should_emit {
+                let _ = tx.send(SearchWorkerMessage::Progress(response_from_grouped(
+                    &trimmed,
+                    &grouped,
+                    total_matches,
+                    false,
+                )));
+                last_emitted_matches = total_matches;
+            }
+        }
+
+        let output = if let Ok(mut slot) = worker_child.lock() {
+            slot.take().and_then(|child| child.wait_with_output().ok())
+        } else {
+            None
+        };
+
+        if worker_cancelled.load(Ordering::Relaxed) {
+            return;
+        }
+
+        if let Some(output) = output {
+            if !truncated && !output.status.success() && output.status.code() != Some(1) {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let message = if stderr.is_empty() {
+                    format!("rg failed with {}", output.status)
+                } else {
+                    stderr
+                };
+                let _ = tx.send(SearchWorkerMessage::Complete(Err(message)));
+                return;
+            }
+        }
+
+        let _ = tx.send(SearchWorkerMessage::Complete(Ok(response_from_grouped(
+            &trimmed,
+            &grouped,
+            total_matches,
+            truncated,
+        ))));
+    });
+
+    SearchStream {
+        rx,
+        cancelled,
+        child,
+    }
+}
+
 fn browse_files(worktree_path: &str) -> Result<ProjectSearchResponse, String> {
     let output = Command::new("rg")
         .current_dir(worktree_path)
@@ -177,6 +311,30 @@ fn browse_files(worktree_path: &str) -> Result<ProjectSearchResponse, String> {
         truncated: false,
         files,
     })
+}
+
+impl SearchStream {
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        kill_stream_child(&self.child);
+    }
+
+    pub(crate) fn take_update(&mut self) -> Option<SearchStreamUpdate> {
+        let mut latest_progress = None;
+
+        loop {
+            match self.rx.try_recv() {
+                Ok(SearchWorkerMessage::Progress(response)) => {
+                    latest_progress = Some(SearchStreamUpdate::Progress(response));
+                }
+                Ok(SearchWorkerMessage::Complete(result)) => {
+                    return Some(SearchStreamUpdate::Complete(result));
+                }
+                Err(TryRecvError::Empty) => return latest_progress,
+                Err(TryRecvError::Disconnected) => return latest_progress,
+            }
+        }
+    }
 }
 
 pub(crate) fn load_preview(
@@ -288,4 +446,53 @@ fn parse_rg_json_line(line: &str) -> Option<(String, ProjectSearchMatch)> {
             ranges,
         },
     ))
+}
+
+fn rg_search_command(worktree_path: &str, query: &str) -> Command {
+    let mut command = Command::new("rg");
+    command.current_dir(worktree_path).args([
+        "--json",
+        "--line-number",
+        "--hidden",
+        "--glob",
+        "!.git",
+        "--engine",
+        "auto",
+        query,
+        ".",
+    ]);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+}
+
+fn response_from_grouped(
+    query: &str,
+    grouped: &BTreeMap<String, Vec<ProjectSearchMatch>>,
+    total_matches: usize,
+    truncated: bool,
+) -> ProjectSearchResponse {
+    let files = grouped
+        .iter()
+        .map(|(path, matches)| ProjectSearchFile {
+            path: path.clone(),
+            match_count: matches.len(),
+            matches: matches.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    ProjectSearchResponse {
+        query: query.to_string(),
+        total_files: files.len(),
+        total_matches,
+        truncated,
+        files,
+    }
+}
+
+fn kill_stream_child(child: &Arc<Mutex<Option<Child>>>) {
+    if let Ok(mut slot) = child.lock()
+        && let Some(child) = slot.as_mut()
+    {
+        let _ = child.kill();
+    }
 }

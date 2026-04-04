@@ -8,7 +8,7 @@ use crate::app::model::{
     next_project_name, next_terminal_name,
 };
 use crate::app::persistence;
-use crate::app::project_search::{ProjectSearchPreview, ProjectSearchResponse};
+use crate::app::project_search::{ProjectSearchPreview, SearchStream};
 use crate::app::runtime::{
     PaneRuntime, RuntimeDiffAction, RuntimeSearchAction, RuntimeSession, SplitAxis, SplitDivider,
 };
@@ -320,6 +320,15 @@ pub(crate) struct ActiveTerminalContext {
     pub(crate) worktree_path: Option<String>,
 }
 
+pub(crate) struct ProjectSearchJob {
+    pub(crate) worktree_path: String,
+    pub(crate) request_id: u64,
+    pub(crate) query: String,
+    pub(crate) stream: SearchStream,
+    pub(crate) pending_progress: Option<crate::app::project_search::ProjectSearchResponse>,
+    pub(crate) pending_progress_deadline: Option<Instant>,
+}
+
 pub(crate) struct App {
     pub(crate) title: String,
     pub(crate) window_id: Option<window::Id>,
@@ -378,6 +387,8 @@ pub(crate) struct App {
     pub(crate) diff_refresh_deadlines: HashMap<String, Instant>,
     /// Terminal sessions with an in-flight diff request.
     pub(crate) diff_refresh_in_flight: HashSet<String>,
+    /// Active streamed project searches keyed by terminal session.
+    pub(crate) project_search_jobs: HashMap<String, ProjectSearchJob>,
     /// Ephemeral terminal search state for the active Ghostty surface.
     pub(crate) terminal_search: Option<TerminalSearchState>,
 }
@@ -443,13 +454,6 @@ pub(crate) enum Message {
     QuickOpenSelect(usize),
     QuickOpenCloseTerminal(String),
     ToggleProjectSearchView,
-    ProjectSearchResultsLoaded {
-        request_id: u64,
-        terminal_id: String,
-        worktree_path: String,
-        query: String,
-        result: Result<ProjectSearchResponse, String>,
-    },
     ProjectSearchPreviewLoaded {
         request_id: u64,
         terminal_id: String,
@@ -591,6 +595,7 @@ impl App {
             browser_webviews: HashMap::new(),
             diff_refresh_deadlines: HashMap::new(),
             diff_refresh_in_flight: HashSet::new(),
+            project_search_jobs: HashMap::new(),
             terminal_search: None,
         };
 
