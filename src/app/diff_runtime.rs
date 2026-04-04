@@ -11,6 +11,7 @@ pub(crate) struct DiffPaneRuntime {
     pub(crate) id: String,
     pub(crate) webview: WebView,
     pub(crate) worktree_path: String,
+    pub(crate) watch_paths: Vec<String>,
     pub(crate) last_html: String,
     pub(crate) last_frame: Option<(f64, f64, f64, f64)>,
     pub(crate) last_hidden: Option<bool>,
@@ -19,7 +20,12 @@ pub(crate) struct DiffPaneRuntime {
 const DIFF_STATE_CAPTURE_SCRIPT: &str = r#"window.__NOT_TERMINAL_DIFF_CAPTURE_STATE__ ? window.__NOT_TERMINAL_DIFF_CAPTURE_STATE__() : "";"#;
 
 impl DiffPaneRuntime {
-    pub(crate) fn new(id: String, webview: WebView, worktree_path: String) -> Self {
+    pub(crate) fn new(
+        id: String,
+        webview: WebView,
+        worktree_path: String,
+        watch_paths: Vec<String>,
+    ) -> Self {
         let html = git_diff::render_loading_html(&worktree_path);
         webview.load_html(&html);
 
@@ -27,6 +33,7 @@ impl DiffPaneRuntime {
             id,
             webview,
             worktree_path,
+            watch_paths,
             last_html: html,
             last_frame: None,
             last_hidden: None,

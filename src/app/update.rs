@@ -1343,6 +1343,10 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::BrowserReload => browser::handle_browser_reload(app),
         Message::BrowserDevTools => browser::handle_browser_devtools(app),
         Message::ToggleDiffView => toggle_diff_view(app),
+        Message::DiffWorktreeChanged(worktree_path) => {
+            let _ = app.schedule_diff_refresh_for_worktree(&worktree_path, Instant::now());
+            Task::none()
+        }
         Message::DiffDataLoaded {
             terminal_id,
             worktree_path,

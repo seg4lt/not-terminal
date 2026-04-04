@@ -1,4 +1,5 @@
 use crate::app::diff_runtime::{DiffPaneAction, DiffPaneRuntime};
+use crate::app::git_watch::DiffWatchSpec;
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyGotoSplitDirection, GhosttyResizeSplitDirection, GhosttyRuntimeAction,
     GhosttySplitDirection, host_view_free, host_view_set_frame, host_view_set_hidden,
@@ -211,6 +212,13 @@ impl RuntimeSession {
             .values()
             .find_map(SessionPane::diff)
             .map(|pane| pane.worktree_path.clone())
+    }
+
+    pub(crate) fn diff_watch_spec(&self) -> Option<DiffWatchSpec> {
+        self.panes
+            .values()
+            .find_map(SessionPane::diff)
+            .map(|pane| DiffWatchSpec::new(pane.worktree_path.clone(), pane.watch_paths.clone()))
     }
 
     pub(crate) fn tick_all(&mut self) -> TickOutcome {

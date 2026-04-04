@@ -1,5 +1,6 @@
 use crate::app::diff_runtime::DiffPaneRuntime;
 use crate::app::git_diff::DiffSnapshot;
+use crate::app::git_watch;
 use crate::app::git_worktrees::{add_worktree, remove_worktree, scan_worktrees};
 use crate::app::model::{
     BrowserRecord, PersistedState, PinnedTerminalRecord, ProjectRecord, TerminalRecord,
@@ -512,6 +513,7 @@ pub(crate) enum Message {
     BrowserReload,
     BrowserDevTools,
     ToggleDiffView,
+    DiffWorktreeChanged(String),
     DiffDataLoaded {
         terminal_id: String,
         worktree_path: String,
@@ -597,8 +599,16 @@ impl App {
             }),
         ];
 
+        let diff_watch_specs = self.diff_watch_specs();
+        if !diff_watch_specs.is_empty() {
+            subscriptions
+                .push(git_watch::subscription(diff_watch_specs).map(Message::DiffWorktreeChanged));
+        }
+
         if !self.runtimes.is_empty() {
-            let cadence = if !self.terminal_progress_active.is_empty() {
+            let cadence = if !self.diff_refresh_deadlines.is_empty() {
+                Duration::from_millis(50)
+            } else if !self.terminal_progress_active.is_empty() {
                 Duration::from_millis(120)
             } else {
                 let time_since_activity = self.last_ghostty_activity.elapsed();
@@ -2155,7 +2165,19 @@ impl App {
             create_id("diff"),
             webview,
             worktree_path.to_string(),
+            git_watch::resolve_watch_paths(worktree_path),
         ))
+    }
+
+    pub(crate) fn diff_watch_specs(&self) -> Vec<git_watch::DiffWatchSpec> {
+        let mut specs = self
+            .runtimes
+            .values()
+            .filter_map(RuntimeSession::diff_watch_spec)
+            .collect::<Vec<_>>();
+        specs.sort_by(|left, right| left.worktree_path.cmp(&right.worktree_path));
+        specs.dedup_by(|left, right| left.worktree_path == right.worktree_path);
+        specs
     }
 
     pub(crate) fn schedule_diff_refresh(&mut self, terminal_id: &str, now: Instant) -> bool {
@@ -2170,6 +2192,28 @@ impl App {
         self.diff_refresh_deadlines
             .insert(terminal_id.to_string(), now + DIFF_REFRESH_DEBOUNCE);
         true
+    }
+
+    pub(crate) fn schedule_diff_refresh_for_worktree(
+        &mut self,
+        worktree_path: &str,
+        now: Instant,
+    ) -> bool {
+        let terminal_ids = self
+            .runtimes
+            .iter()
+            .filter_map(|(terminal_id, runtime)| {
+                (runtime.diff_worktree_path().as_deref() == Some(worktree_path))
+                    .then_some(terminal_id.clone())
+            })
+            .collect::<Vec<_>>();
+
+        let mut scheduled_any = false;
+        for terminal_id in terminal_ids {
+            scheduled_any |= self.schedule_diff_refresh(&terminal_id, now);
+        }
+
+        scheduled_any
     }
 
     pub(crate) fn clear_diff_refresh_state(&mut self, terminal_id: &str) {
