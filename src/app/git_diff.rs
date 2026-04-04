@@ -112,9 +112,12 @@ pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
     let file_tree = render_file_tree(&files);
     let sections = render_snapshot_files(&files);
     let body = format!(
-        "<div class=\"diff-shell\"><div class=\"view-toolbar\"><div class=\"view-toolbar-meta\"><span class=\"toolbar-total toolbar-total-added\">+{}</span><span class=\"toolbar-total toolbar-total-removed\">-{}</span></div><div class=\"view-toolbar-actions\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-file\" title=\"Previous file\" aria-label=\"Previous file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-file\" title=\"Next file\" aria-label=\"Next file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-hunk\" title=\"Previous change\" aria-label=\"Previous change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-hunk\" title=\"Next change\" aria-label=\"Next change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-collapse\" title=\"Collapse files\" aria-label=\"Collapse files\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"close-diff\" title=\"Close diff\" aria-label=\"Close diff\">{}</button></div></div><div class=\"diff-zoom-surface\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div></div>",
+        "<div class=\"diff-shell\"><div class=\"view-toolbar\"><div class=\"view-toolbar-meta\"><span class=\"toolbar-total toolbar-total-added\">+{}</span><span class=\"toolbar-total toolbar-total-removed\">-{}</span></div><div class=\"view-toolbar-search\"><label class=\"toolbar-search\"><span class=\"toolbar-search-icon\">{}</span><input type=\"search\" data-role=\"content-search\" placeholder=\"Search diff...\" spellcheck=\"false\"></label><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-match\" title=\"Previous match\" aria-label=\"Previous match\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-match\" title=\"Next match\" aria-label=\"Next match\">{}</button><span class=\"toolbar-search-count\" data-role=\"search-count\">0</span></div><div class=\"view-toolbar-actions\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-file\" title=\"Previous file\" aria-label=\"Previous file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-file\" title=\"Next file\" aria-label=\"Next file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-hunk\" title=\"Previous change\" aria-label=\"Previous change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-hunk\" title=\"Next change\" aria-label=\"Next change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-collapse\" title=\"Collapse files\" aria-label=\"Collapse files\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"close-diff\" title=\"Close diff\" aria-label=\"Close diff\">{}</button></div></div><div class=\"diff-zoom-surface\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div></div>",
         total_added,
         total_removed,
+        search_icon(),
+        chevron_up_icon(),
+        chevron_down_icon(),
         tree_icon(),
         chevron_up_icon(),
         chevron_down_icon(),
@@ -1149,6 +1152,73 @@ body.tree-open .diff-zoom-surface {
 .toolbar-total-removed {
   color: #ff5f61;
 }
+.view-toolbar-search {
+  flex: 1 1 280px;
+  min-width: 160px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.toolbar-search {
+  flex: 1 1 240px;
+  max-width: 320px;
+  min-width: 120px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(24, 25, 27, 0.72);
+  color: #8f97a2;
+}
+.toolbar-search:focus-within {
+  border-color: rgba(104, 156, 255, 0.18);
+  background: rgba(28, 29, 32, 0.9);
+}
+.toolbar-search-icon {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+.toolbar-search-icon svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.toolbar-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.1;
+}
+.toolbar-search input:focus {
+  outline: none;
+}
+.toolbar-search input::placeholder {
+  color: #8f97a2;
+}
+.toolbar-search-count {
+  min-width: 36px;
+  text-align: right;
+  color: #8f97a2;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
 .view-toolbar-actions {
   display: inline-flex;
   align-items: center;
@@ -1608,6 +1678,14 @@ body.tree-open .file-tree-panel {
 .inline-diff-removed {
   background: rgba(255, 96, 96, 0.24);
 }
+.search-hit {
+  background: rgba(255, 219, 87, 0.22);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.search-hit.is-current {
+  background: rgba(255, 219, 87, 0.52);
+}
 .tok-comment { color: #7d8590; font-style: italic; }
 .tok-string { color: #f6c177; }
 .tok-number { color: #8bd5ff; }
@@ -1786,6 +1864,7 @@ fn document_js() -> &'static str {
     r###"
 (function () {
   const EXCERPT_CHUNK = 10;
+  const SEARCH_INPUT_DEBOUNCE_MS = 60;
   const KEYWORDS = {
     rust: new Set(["as","async","await","break","const","continue","crate","dyn","else","enum","extern","false","fn","for","if","impl","in","let","loop","match","mod","move","mut","pub","ref","return","self","Self","static","struct","super","trait","true","type","unsafe","use","where","while"]),
     js: new Set(["async","await","break","case","catch","class","const","continue","default","else","export","extends","false","finally","for","from","function","if","import","in","let","new","null","return","static","super","switch","this","throw","true","try","typeof","undefined","var","while","yield"]),
@@ -1943,38 +2022,81 @@ fn document_js() -> &'static str {
     }).filter(Boolean);
   }
 
-  function highlightWithInlineRanges(input, language, ranges, kind) {
-    if (!ranges.length) return highlightLine(input, language);
+  function findSearchRanges(input, query) {
+    if (!query) return [];
 
+    const needle = query.toLowerCase();
+    const haystack = input.toLowerCase();
+    const ranges = [];
     let cursor = 0;
-    let html = '';
-    ranges.forEach(([start, end]) => {
-      const safeStart = Math.max(cursor, start);
-      const safeEnd = Math.max(safeStart, end);
-      if (cursor < safeStart) {
-        html += highlightLine(input.slice(cursor, safeStart), language);
-      }
-      if (safeStart < safeEnd) {
-        html += `<span class="inline-diff inline-diff-${kind}">${highlightLine(input.slice(safeStart, safeEnd), language)}</span>`;
-      }
-      cursor = safeEnd;
-    });
-    if (cursor < input.length) {
-      html += highlightLine(input.slice(cursor), language);
+
+    while (cursor <= haystack.length - needle.length) {
+      const matchIndex = haystack.indexOf(needle, cursor);
+      if (matchIndex === -1) break;
+      ranges.push([matchIndex, matchIndex + needle.length]);
+      cursor = matchIndex + Math.max(needle.length, 1);
     }
+
+    return ranges;
+  }
+
+  function clampRanges(inputLength, ranges) {
+    return ranges
+      .map(([start, end]) => [Math.max(0, start), Math.min(inputLength, end)])
+      .filter(([start, end]) => end > start);
+  }
+
+  function rangeIntersects(ranges, start, end) {
+    return ranges.some(([rangeStart, rangeEnd]) => rangeStart < end && rangeEnd > start);
+  }
+
+  function highlightDecoratedLine(input, language, inlineRanges, inlineKind, searchRanges) {
+    const normalizedInlineRanges = clampRanges(input.length, inlineRanges);
+    const normalizedSearchRanges = clampRanges(input.length, searchRanges);
+    if (!normalizedInlineRanges.length && !normalizedSearchRanges.length) {
+      return highlightLine(input, language);
+    }
+
+    const boundaries = new Set([0, input.length]);
+    normalizedInlineRanges.forEach(([start, end]) => {
+      boundaries.add(start);
+      boundaries.add(end);
+    });
+    normalizedSearchRanges.forEach(([start, end]) => {
+      boundaries.add(start);
+      boundaries.add(end);
+    });
+
+    const sorted = Array.from(boundaries).sort((left, right) => left - right);
+    let html = "";
+    for (let index = 0; index < sorted.length - 1; index += 1) {
+      const start = sorted[index];
+      const end = sorted[index + 1];
+      if (end <= start) continue;
+
+      const segment = input.slice(start, end);
+      let segmentHtml = highlightLine(segment, language);
+
+      if (inlineKind && rangeIntersects(normalizedInlineRanges, start, end)) {
+        segmentHtml = `<span class="inline-diff inline-diff-${inlineKind}">${segmentHtml}</span>`;
+      }
+
+      if (rangeIntersects(normalizedSearchRanges, start, end)) {
+        segmentHtml = `<span class="search-hit">${segmentHtml}</span>`;
+      }
+
+      html += segmentHtml;
+    }
+
     return html;
   }
 
-  document.querySelectorAll('.code[data-highlight="1"] .code-content').forEach((node) => {
-    const language = languageFor(node);
-    const source = node.dataset.source || node.textContent || "";
-    const ranges = parseInlineRanges(node.dataset.inlineRanges || "");
-    const kind = node.dataset.inlineKind || "added";
-    node.innerHTML = highlightWithInlineRanges(source, language, ranges, kind);
-  });
-
   const body = document.body;
   const treeButton = document.querySelector('[data-action="toggle-tree"]');
+  const searchInput = document.querySelector('[data-role="content-search"]');
+  const prevMatchButton = document.querySelector('[data-action="prev-match"]');
+  const nextMatchButton = document.querySelector('[data-action="next-match"]');
+  const searchCount = document.querySelector('[data-role="search-count"]');
   const prevFileButton = document.querySelector('[data-action="prev-file"]');
   const nextFileButton = document.querySelector('[data-action="next-file"]');
   const prevHunkButton = document.querySelector('[data-action="prev-hunk"]');
@@ -1986,7 +2108,12 @@ fn document_js() -> &'static str {
   const fileCards = Array.from(document.querySelectorAll('.file-card'));
   const treeFiles = Array.from(document.querySelectorAll('.tree-file'));
   const treeGroups = Array.from(document.querySelectorAll('.tree-group'));
+  const highlightedCodeNodes = Array.from(document.querySelectorAll('.code[data-highlight="1"] .code-content'));
   const initialState = window.__NOT_TERMINAL_DIFF_INITIAL_STATE__ || null;
+  let currentSearchQuery = "";
+  let searchMatches = [];
+  let activeSearchMatchIndex = -1;
+  let contentSearchDebounce = 0;
 
   function postNativeAction(action) {
     try {
@@ -1997,6 +2124,22 @@ fn document_js() -> &'static str {
     } catch (_error) {
       return false;
     }
+  }
+
+  function beginTextInput(target) {
+    postNativeAction('enable-text-input');
+    window.setTimeout(() => {
+      if (target && typeof target.focus === 'function') {
+        target.focus();
+        if (typeof target.select === 'function') {
+          target.select();
+        }
+      }
+    }, 0);
+  }
+
+  function endTextInput() {
+    postNativeAction('disable-text-input');
   }
 
   function visibleCards() {
@@ -2142,6 +2285,18 @@ fn document_js() -> &'static str {
       fullscreenButton.title = splitZoomed ? 'Exit fullscreen' : 'Enter fullscreen';
       fullscreenButton.setAttribute('aria-label', fullscreenButton.title);
     }
+
+    if (prevMatchButton) {
+      prevMatchButton.disabled = searchMatches.length <= 1;
+      prevMatchButton.title = 'Previous match';
+      prevMatchButton.setAttribute('aria-label', 'Previous match');
+    }
+
+    if (nextMatchButton) {
+      nextMatchButton.disabled = searchMatches.length <= 1;
+      nextMatchButton.title = 'Next match';
+      nextMatchButton.setAttribute('aria-label', 'Next match');
+    }
   }
 
   function toggleTree() {
@@ -2267,7 +2422,153 @@ fn document_js() -> &'static str {
       }
     }
 
+    syncSearchResults(false);
     syncToolbar();
+  }
+
+  function syncSearchResults(scrollToCurrent = false) {
+    searchMatches = Array.from(document.querySelectorAll('.search-hit')).filter((match) => {
+      const card = match.closest('.file-card');
+      return !card || !card.classList.contains('filter-hidden');
+    });
+
+    if (!currentSearchQuery || searchMatches.length === 0) {
+      activeSearchMatchIndex = -1;
+    } else if (activeSearchMatchIndex < 0 || activeSearchMatchIndex >= searchMatches.length) {
+      activeSearchMatchIndex = 0;
+    }
+
+    searchMatches.forEach((match, index) => {
+      match.classList.toggle('is-current', index === activeSearchMatchIndex);
+    });
+
+    if (searchCount) {
+      searchCount.textContent =
+        currentSearchQuery && searchMatches.length
+          ? `${activeSearchMatchIndex + 1}/${searchMatches.length}`
+          : '0';
+    }
+
+    if (scrollToCurrent && activeSearchMatchIndex >= 0) {
+      const current = searchMatches[activeSearchMatchIndex];
+      const card = current?.closest('.file-card');
+      if (card?.dataset.fileId) {
+        setActiveFile(card.dataset.fileId, { scroll: false, open: true });
+      }
+      current?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+    }
+
+    syncToolbar();
+  }
+
+  function syncSearchAwareExcerpts() {
+    document.querySelectorAll('.context-group').forEach((group) => {
+      const hasSearchMatch = !!(currentSearchQuery && group.querySelector('.search-hit'));
+      group.dataset.excerptSearchRevealAll = hasSearchMatch ? '1' : '0';
+      updateExcerpt(group);
+    });
+  }
+
+  function initializeHighlightedCode() {
+    highlightedCodeNodes.forEach((node) => {
+      const language = languageFor(node);
+      const source = node.dataset.source || node.textContent || "";
+      const ranges = parseInlineRanges(node.dataset.inlineRanges || "");
+      const kind = node.dataset.inlineKind || "";
+      const baseHtml = highlightDecoratedLine(source, language, ranges, kind, []);
+
+      node.__diffLanguage = language;
+      node.__diffSource = source;
+      node.__diffSourceLower = source.toLowerCase();
+      node.__diffInlineRanges = ranges;
+      node.__diffInlineKind = kind;
+      node.__diffBaseHtml = baseHtml;
+      node.__diffRenderedQuery = "";
+      node.__diffHasSearchHit = false;
+      node.innerHTML = baseHtml;
+    });
+  }
+
+  function renderHighlightedCode() {
+    highlightedCodeNodes.forEach((node) => {
+      const source = node.__diffSource || node.dataset.source || node.textContent || "";
+      const sourceLower = node.__diffSourceLower || source.toLowerCase();
+      const baseHtml = node.__diffBaseHtml || "";
+      const language = node.__diffLanguage || languageFor(node);
+      const ranges = node.__diffInlineRanges || parseInlineRanges(node.dataset.inlineRanges || "");
+      const kind = node.__diffInlineKind || node.dataset.inlineKind || "";
+      const hasSearchHit = !!currentSearchQuery && sourceLower.includes(currentSearchQuery);
+
+      if (!currentSearchQuery) {
+        if (node.__diffRenderedQuery !== "") {
+          node.innerHTML = baseHtml;
+          node.__diffRenderedQuery = "";
+          node.__diffHasSearchHit = false;
+        }
+        return;
+      }
+
+      if (!hasSearchHit) {
+        if (node.__diffHasSearchHit || node.__diffRenderedQuery !== "") {
+          node.innerHTML = baseHtml;
+          node.__diffRenderedQuery = "";
+          node.__diffHasSearchHit = false;
+        }
+        return;
+      }
+
+      if (node.__diffRenderedQuery === currentSearchQuery && node.__diffHasSearchHit) {
+        return;
+      }
+
+      const searchRanges = findSearchRanges(source, currentSearchQuery);
+      node.innerHTML = highlightDecoratedLine(source, language, ranges, kind, searchRanges);
+      node.__diffRenderedQuery = currentSearchQuery;
+      node.__diffHasSearchHit = true;
+    });
+
+    if (currentSearchQuery) {
+      fileCards.forEach((card) => {
+        if (card.querySelector('.search-hit')) {
+          card.open = true;
+        }
+      });
+    }
+
+    syncSearchAwareExcerpts();
+    syncSearchResults(false);
+  }
+
+  function applyContentSearch(scrollToCurrent = false) {
+    currentSearchQuery = (searchInput?.value || '').trim().toLowerCase();
+    if (!currentSearchQuery) {
+      activeSearchMatchIndex = -1;
+    } else if (scrollToCurrent) {
+      activeSearchMatchIndex = 0;
+    }
+    renderHighlightedCode();
+    syncSearchResults(scrollToCurrent);
+  }
+
+  function scheduleContentSearch(scrollToCurrent = false) {
+    if (contentSearchDebounce) {
+      window.clearTimeout(contentSearchDebounce);
+    }
+    contentSearchDebounce = window.setTimeout(() => {
+      contentSearchDebounce = 0;
+      applyContentSearch(scrollToCurrent);
+    }, SEARCH_INPUT_DEBOUNCE_MS);
+  }
+
+  function moveSearchMatch(offset) {
+    if (!searchMatches.length) return;
+    if (activeSearchMatchIndex < 0) {
+      activeSearchMatchIndex = 0;
+    } else {
+      activeSearchMatchIndex =
+        (activeSearchMatchIndex + offset + searchMatches.length) % searchMatches.length;
+    }
+    syncSearchResults(true);
   }
 
   function captureDiffState() {
@@ -2283,6 +2584,8 @@ fn document_js() -> &'static str {
       treeOpen: body.classList.contains('tree-open'),
       splitZoomed: fullscreenButton?.classList.contains('is-active') || false,
       filterValue: filterInput?.value || "",
+      contentSearchValue: searchInput?.value || "",
+      activeSearchMatchIndex,
       activeFile: body.dataset.activeFile || "",
       openFiles: fileCards.filter((card) => card.open).map((card) => card.dataset.fileId || ""),
       openTreeGroups: treeGroups.filter((group) => group.open).map((group) => group.dataset.treeId || ""),
@@ -2305,6 +2608,11 @@ fn document_js() -> &'static str {
       applyFilter();
     }
 
+    if (searchInput && typeof state.contentSearchValue === 'string') {
+      searchInput.value = state.contentSearchValue;
+      currentSearchQuery = state.contentSearchValue.trim().toLowerCase();
+    }
+
     // Note: openFiles and excerpts are intentionally NOT restored so that
     // the default "all expanded" state is preserved on every reload.
 
@@ -2317,6 +2625,13 @@ fn document_js() -> &'static str {
 
     if (typeof state.activeFile === 'string' && state.activeFile) {
       setActiveFile(state.activeFile, { scroll: false, open: false });
+    }
+
+    renderHighlightedCode();
+
+    if (Number.isFinite(state.activeSearchMatchIndex)) {
+      activeSearchMatchIndex = Number(state.activeSearchMatchIndex);
+      syncSearchResults(false);
     }
 
     if (Number.isFinite(state.scrollY)) {
@@ -2402,6 +2717,8 @@ fn document_js() -> &'static str {
   }
 
   treeButton?.addEventListener('click', toggleTree);
+  prevMatchButton?.addEventListener('click', () => moveSearchMatch(-1));
+  nextMatchButton?.addEventListener('click', () => moveSearchMatch(1));
   prevFileButton?.addEventListener('click', () => moveFile(-1));
   nextFileButton?.addEventListener('click', () => moveFile(1));
   prevHunkButton?.addEventListener('click', () => moveHunk(-1));
@@ -2410,6 +2727,25 @@ fn document_js() -> &'static str {
   fullscreenButton?.addEventListener('click', toggleFullscreen);
   closeButton?.addEventListener('click', closeDiff);
   filterInput?.addEventListener('input', applyFilter);
+  searchInput?.addEventListener('input', () => scheduleContentSearch(true));
+  searchInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      moveSearchMatch(event.shiftKey ? -1 : 1);
+    }
+  });
+  [filterInput, searchInput].filter(Boolean).forEach((input) => {
+    input.addEventListener('mousedown', () => beginTextInput(input));
+    input.addEventListener('focus', () => beginTextInput(input));
+    input.addEventListener('blur', () => {
+      window.setTimeout(() => {
+        const active = document.activeElement;
+        if (active !== filterInput && active !== searchInput) {
+          endTextInput();
+        }
+      }, 0);
+    });
+  });
   window.addEventListener('scroll', syncActiveFileFromScroll, { passive: true });
   document.addEventListener('selectionchange', syncCustomSelection);
 
@@ -2458,6 +2794,7 @@ fn document_js() -> &'static str {
     const total = rows.length;
     let head = Math.min(Number(group.dataset.excerptHead || 0), total);
     let tail = Math.min(Number(group.dataset.excerptTail || 0), Math.max(0, total - head));
+    const searchRevealAll = group.dataset.excerptSearchRevealAll === '1';
 
     if (head + tail > total) {
       tail = Math.max(0, total - head);
@@ -2472,7 +2809,7 @@ fn document_js() -> &'static str {
       let visible = false;
       let order = index;
 
-      if (index < head) {
+      if (searchRevealAll || index < head) {
         visible = true;
         order = index;
       } else if (index >= total - tail) {
@@ -2488,7 +2825,7 @@ fn document_js() -> &'static str {
       controls.style.order = String(head);
     }
 
-    const remaining = Math.max(0, total - head - tail);
+    const remaining = searchRevealAll ? 0 : Math.max(0, total - head - tail);
     const nextTopChunk = Math.min(EXCERPT_CHUNK, remaining);
     const nextBottomChunk = Math.min(EXCERPT_CHUNK, remaining);
 
@@ -2552,6 +2889,7 @@ fn document_js() -> &'static str {
 
   const preferred = firstPreferredCard();
   setDiffZoom(DEFAULT_DIFF_ZOOM);
+  initializeHighlightedCode();
   if (preferred) {
     setActiveFile(preferred.dataset.fileId || '', { scroll: false });
   }
@@ -2583,6 +2921,10 @@ fn jump_up_icon() -> &'static str {
 
 fn jump_down_icon() -> &'static str {
     r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v11"></path><path d="M7.5 12.5L12 17l4.5-4.5"></path><path d="M6 4h12"></path></svg>"#
+}
+
+fn search_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4 4"></path></svg>"#
 }
 
 fn collapse_icon() -> &'static str {

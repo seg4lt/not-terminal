@@ -15,6 +15,9 @@ typedef struct rust_webview_s {
     bool prefers_key_equivalents;
 } rust_webview_t;
 
+@class KeyboardCapableWKWebView;
+static void rust_webview_restore_safe_responder(rust_webview_t *wrapper);
+
 static bool rust_webview_is_owned_responder(rust_webview_t *wrapper, NSResponder *responder) {
     if (wrapper == NULL || wrapper->webview == nil || responder == nil) {
         return false;
@@ -94,6 +97,28 @@ static bool rust_webview_copy_selection_to_pasteboard(rust_webview_t *wrapper) {
     BOOL wrote = [pasteboard setString:selectedText forType:NSPasteboardTypeString];
     [selectedText release];
     return wrote == YES;
+}
+
+static void rust_webview_set_keyboard_enabled_state(rust_webview_t *wrapper,
+                                                    BOOL enabled,
+                                                    BOOL focusWebView) {
+    if (wrapper == NULL || wrapper->webview == nil) {
+        return;
+    }
+
+    WKWebView *webview = wrapper->webview;
+    [webview setValue:@(enabled) forKey:@"keyboardEnabled"];
+
+    NSWindow *window = [wrapper->webview window];
+    if (enabled) {
+        if (focusWebView && window != nil) {
+            [window makeFirstResponder:wrapper->webview];
+        }
+        return;
+    }
+
+    wrapper->prefers_key_equivalents = false;
+    rust_webview_restore_safe_responder(wrapper);
 }
 
 static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
@@ -277,6 +302,16 @@ static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
     }
 
     NSString *action = (NSString *)message.body;
+    if ([action isEqualToString:@"enable-text-input"]) {
+        rust_webview_set_keyboard_enabled_state(_wrapper, YES, YES);
+        return;
+    }
+
+    if ([action isEqualToString:@"disable-text-input"]) {
+        rust_webview_set_keyboard_enabled_state(_wrapper, NO, NO);
+        return;
+    }
+
     const char *utf8 = [action UTF8String];
     if (utf8 == NULL) {
         return;
@@ -806,13 +841,7 @@ void webview_set_keyboard_enabled(void *webview_ptr, bool enabled) {
         return;
     }
 
-    [(KeyboardCapableWKWebView *)wrapper->webview setKeyboardEnabled:enabled ? YES : NO];
-
-    // If disabling, resign first responder immediately so the terminal can reclaim it.
-    if (!enabled) {
-        wrapper->prefers_key_equivalents = false;
-        rust_webview_restore_safe_responder(wrapper);
-    }
+    rust_webview_set_keyboard_enabled_state(wrapper, enabled ? YES : NO, NO);
 }
 
 // Make the webview lose focus (so keyboard input doesn't go to it)
