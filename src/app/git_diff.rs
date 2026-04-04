@@ -28,6 +28,29 @@ pub(crate) struct DiffHunk {
     pub(crate) lines: Vec<DiffLine>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FileStage {
+    Working,
+    Index,
+    Both,
+}
+
+#[derive(Debug, Clone)]
+struct MergedDiffFile {
+    path: String,
+    added: usize,
+    removed: usize,
+    hunks: Vec<MergedDiffHunk>,
+    stage: FileStage,
+}
+
+#[derive(Debug, Clone)]
+struct MergedDiffHunk {
+    header: String,
+    lines: Vec<DiffLine>,
+    stage: FileStage,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DiffLineKind {
     Context,
@@ -42,6 +65,7 @@ pub(crate) struct DiffLine {
     pub(crate) old_line: Option<usize>,
     pub(crate) new_line: Option<usize>,
     pub(crate) text: String,
+    pub(crate) inline_ranges: Vec<(usize, usize)>,
 }
 
 pub(crate) fn load_snapshot(worktree_path: &str) -> Result<DiffSnapshot, String> {
@@ -98,30 +122,18 @@ pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
 }
 
 fn render_snapshot_files(snapshot: &DiffSnapshot) -> String {
-    let total_count = snapshot
-        .sections
-        .iter()
-        .map(|section| section.files.len())
-        .sum::<usize>();
+    let files = merged_files(snapshot);
+    let total_count = files.len();
 
     if total_count == 0 {
         return String::from("<div class=\"empty-state\">No changes to display.</div>");
     }
 
-    let files = snapshot
-        .sections
-        .iter()
-        .flat_map(|section| {
-            section.files.iter().map(move |file| {
-                render_file(file, section.label, &file_dom_id(section.label, &file.path))
-            })
-        })
-        .collect::<Vec<_>>()
-        .join("");
+    let rendered = files.iter().map(render_file).collect::<Vec<_>>().join("");
 
     format!(
         "<section class=\"diff-section\"><div class=\"section-header\"><div class=\"section-title\">Changes</div><div class=\"section-count\">{}</div></div>{}</section>",
-        total_count, files
+        total_count, rendered
     )
 }
 
@@ -216,6 +228,7 @@ fn parse_patch(patch: &str) -> Vec<DiffFile> {
                 old_line: None,
                 new_line: Some(new_line),
                 text: raw_line[1..].to_string(),
+                inline_ranges: Vec::new(),
             });
             new_line += 1;
         } else if raw_line.starts_with('-') && !raw_line.starts_with("---") {
@@ -225,6 +238,7 @@ fn parse_patch(patch: &str) -> Vec<DiffFile> {
                 old_line: Some(old_line),
                 new_line: None,
                 text: raw_line[1..].to_string(),
+                inline_ranges: Vec::new(),
             });
             old_line += 1;
         } else if let Some(context) = raw_line.strip_prefix(' ') {
@@ -233,6 +247,7 @@ fn parse_patch(patch: &str) -> Vec<DiffFile> {
                 old_line: Some(old_line),
                 new_line: Some(new_line),
                 text: context.to_string(),
+                inline_ranges: Vec::new(),
             });
             old_line += 1;
             new_line += 1;
@@ -242,6 +257,7 @@ fn parse_patch(patch: &str) -> Vec<DiffFile> {
                 old_line: None,
                 new_line: None,
                 text: note.trim().to_string(),
+                inline_ranges: Vec::new(),
             });
         }
     }
@@ -291,7 +307,300 @@ fn parse_hunk_range(spec: &str) -> Option<usize> {
     number.parse().ok()
 }
 
-fn render_file(file: &DiffFile, section_label: &str, file_id: &str) -> String {
+impl FileStage {
+    fn from_section_label(label: &str) -> Self {
+        match label {
+            "Staged" => Self::Index,
+            _ => Self::Working,
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Both, _) | (_, Self::Both) => Self::Both,
+            (Self::Working, Self::Working) => Self::Working,
+            (Self::Index, Self::Index) => Self::Index,
+            _ => Self::Both,
+        }
+    }
+
+    fn dom_label(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::Index => "index",
+            Self::Both => "both",
+        }
+    }
+
+    fn meta_label(self) -> &'static str {
+        match self {
+            Self::Working => "working copy",
+            Self::Index => "index",
+            Self::Both => "working + index",
+        }
+    }
+
+    fn tree_class(self) -> &'static str {
+        match self {
+            Self::Working => "tree-stage-working",
+            Self::Index => "tree-stage-index",
+            Self::Both => "tree-stage-both",
+        }
+    }
+}
+
+fn merged_files(snapshot: &DiffSnapshot) -> Vec<MergedDiffFile> {
+    let mut merged: Vec<MergedDiffFile> = Vec::new();
+
+    for section in &snapshot.sections {
+        let stage = FileStage::from_section_label(section.label);
+        for file in &section.files {
+            if let Some(existing) = merged
+                .iter_mut()
+                .find(|candidate| candidate.path == file.path)
+            {
+                existing.added += file.added;
+                existing.removed += file.removed;
+                existing.stage = existing.stage.merge(stage);
+                existing
+                    .hunks
+                    .extend(file.hunks.iter().cloned().map(|hunk| {
+                        let mut lines = hunk.lines;
+                        annotate_inline_changes(&mut lines);
+                        MergedDiffHunk {
+                            header: hunk.header,
+                            lines,
+                            stage,
+                        }
+                    }));
+            } else {
+                let mut hunks = Vec::with_capacity(file.hunks.len());
+                for hunk in &file.hunks {
+                    let mut lines = hunk.lines.clone();
+                    annotate_inline_changes(&mut lines);
+                    hunks.push(MergedDiffHunk {
+                        header: hunk.header.clone(),
+                        lines,
+                        stage,
+                    });
+                }
+
+                merged.push(MergedDiffFile {
+                    path: file.path.clone(),
+                    added: file.added,
+                    removed: file.removed,
+                    hunks,
+                    stage,
+                });
+            }
+        }
+    }
+
+    merged
+}
+
+fn annotate_inline_changes(lines: &mut [DiffLine]) {
+    let mut index = 0usize;
+
+    while index < lines.len() {
+        if lines[index].kind != DiffLineKind::Removed {
+            index += 1;
+            continue;
+        }
+
+        let removed_start = index;
+        while index < lines.len() && lines[index].kind == DiffLineKind::Removed {
+            index += 1;
+        }
+        let removed_len = index - removed_start;
+
+        let added_start = index;
+        while index < lines.len() && lines[index].kind == DiffLineKind::Added {
+            index += 1;
+        }
+
+        let added_len = index - added_start;
+        if removed_len == 0 || added_len == 0 {
+            continue;
+        }
+
+        let block_end = added_start + added_len;
+        let (removed_block, added_block) =
+            lines[removed_start..block_end].split_at_mut(removed_len);
+        for pair_index in 0..removed_len.min(added_len) {
+            let (removed_ranges, added_ranges) = compute_inline_ranges(
+                &removed_block[pair_index].text,
+                &added_block[pair_index].text,
+            );
+            removed_block[pair_index].inline_ranges = removed_ranges;
+            added_block[pair_index].inline_ranges = added_ranges;
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InlineKind {
+    Word,
+    Space,
+    Punct,
+}
+
+#[derive(Clone, Copy)]
+struct InlineToken<'a> {
+    start: usize,
+    text: &'a str,
+}
+
+fn compute_inline_ranges(left: &str, right: &str) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+    let left_tokens = tokenize_inline(left);
+    let right_tokens = tokenize_inline(right);
+
+    if left_tokens.is_empty() || right_tokens.is_empty() {
+        return fallback_inline_ranges(left, right);
+    }
+
+    let mut lcs = vec![vec![0usize; right_tokens.len() + 1]; left_tokens.len() + 1];
+    for left_index in (0..left_tokens.len()).rev() {
+        for right_index in (0..right_tokens.len()).rev() {
+            lcs[left_index][right_index] =
+                if left_tokens[left_index].text == right_tokens[right_index].text {
+                    lcs[left_index + 1][right_index + 1] + 1
+                } else {
+                    lcs[left_index + 1][right_index].max(lcs[left_index][right_index + 1])
+                };
+        }
+    }
+
+    let mut shared_left = vec![false; left_tokens.len()];
+    let mut shared_right = vec![false; right_tokens.len()];
+    let mut left_index = 0usize;
+    let mut right_index = 0usize;
+    while left_index < left_tokens.len() && right_index < right_tokens.len() {
+        if left_tokens[left_index].text == right_tokens[right_index].text {
+            shared_left[left_index] = true;
+            shared_right[right_index] = true;
+            left_index += 1;
+            right_index += 1;
+        } else if lcs[left_index + 1][right_index] >= lcs[left_index][right_index + 1] {
+            left_index += 1;
+        } else {
+            right_index += 1;
+        }
+    }
+
+    let left_ranges = collect_inline_ranges(left, &left_tokens, &shared_left);
+    let right_ranges = collect_inline_ranges(right, &right_tokens, &shared_right);
+    if left_ranges.is_empty() && right_ranges.is_empty() && left != right {
+        fallback_inline_ranges(left, right)
+    } else {
+        (left_ranges, right_ranges)
+    }
+}
+
+fn tokenize_inline(input: &str) -> Vec<InlineToken<'_>> {
+    let mut tokens = Vec::new();
+    let mut current_start = None;
+    let mut current_kind = InlineKind::Word;
+
+    for (index, ch) in input.char_indices() {
+        let kind = if ch.is_ascii_alphanumeric() || ch == '_' {
+            InlineKind::Word
+        } else if ch.is_whitespace() {
+            InlineKind::Space
+        } else {
+            InlineKind::Punct
+        };
+
+        match current_start {
+            Some(start) if kind == current_kind && kind != InlineKind::Punct => {}
+            Some(start) => {
+                tokens.push(InlineToken {
+                    start,
+                    text: &input[start..index],
+                });
+                current_start = Some(index);
+                current_kind = kind;
+            }
+            None => {
+                current_start = Some(index);
+                current_kind = kind;
+            }
+        }
+    }
+
+    if let Some(start) = current_start {
+        tokens.push(InlineToken {
+            start,
+            text: &input[start..],
+        });
+    }
+
+    tokens
+}
+
+fn collect_inline_ranges(
+    source: &str,
+    tokens: &[InlineToken<'_>],
+    shared: &[bool],
+) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start = None;
+
+    for (token, is_shared) in tokens.iter().zip(shared.iter().copied()) {
+        let is_significant = !token.text.trim().is_empty();
+        if !is_shared && is_significant {
+            start.get_or_insert(token.start);
+        } else if let Some(range_start) = start.take() {
+            ranges.push((range_start, token.start));
+        }
+    }
+
+    if let Some(range_start) = start {
+        ranges.push((range_start, source.len()));
+    }
+
+    ranges
+}
+
+fn fallback_inline_ranges(left: &str, right: &str) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+    if left == right {
+        return (Vec::new(), Vec::new());
+    }
+
+    let prefix = left
+        .chars()
+        .zip(right.chars())
+        .take_while(|(left_char, right_char)| left_char == right_char)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
+
+    let mut left_suffix = left.len();
+    let mut right_suffix = right.len();
+    while left_suffix > prefix && right_suffix > prefix {
+        let left_char = left[..left_suffix].chars().next_back().unwrap();
+        let right_char = right[..right_suffix].chars().next_back().unwrap();
+        if left_char != right_char {
+            break;
+        }
+        left_suffix -= left_char.len_utf8();
+        right_suffix -= right_char.len_utf8();
+    }
+
+    let left_range = if prefix < left_suffix {
+        vec![(prefix, left_suffix)]
+    } else {
+        Vec::new()
+    };
+    let right_range = if prefix < right_suffix {
+        vec![(prefix, right_suffix)]
+    } else {
+        Vec::new()
+    };
+    (left_range, right_range)
+}
+
+fn render_file(file: &MergedDiffFile) -> String {
+    let file_id = file_dom_id(&file.path);
     let language = infer_language(&file.path);
     let hunks = if file.hunks.is_empty() {
         "<div class=\"file-empty\">No textual changes to display.</div>".to_string()
@@ -302,28 +611,23 @@ fn render_file(file: &DiffFile, section_label: &str, file_id: &str) -> String {
             .collect::<Vec<_>>()
             .join("")
     };
-    let open_attr = if section_label == "Unstaged" {
-        " open"
-    } else {
+    let open_attr = if matches!(file.stage, FileStage::Index) {
         ""
-    };
-    let stage_label = if section_label == "Unstaged" {
-        "working"
     } else {
-        "index"
+        " open"
     };
 
     format!(
         "<details id=\"{}\" class=\"file-card\" data-language=\"{}\" data-file-id=\"{}\" data-stage=\"{}\" data-search=\"{} {}\"{}><summary><span class=\"file-main\"><span class=\"file-path\">{}</span><span class=\"file-stage-meta\">{}</span></span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\">{}</div></details>",
-        escape_html(file_id),
+        escape_html(&file_id),
         language,
-        escape_html(file_id),
-        escape_html(section_label),
+        escape_html(&file_id),
+        file.stage.dom_label(),
         escape_html(&file.path),
-        escape_html(section_label),
+        escape_html(file.stage.meta_label()),
         open_attr,
         escape_html(&file.path),
-        escape_html(stage_label),
+        escape_html(file.stage.meta_label()),
         file.added,
         file.removed,
         hunks
@@ -331,14 +635,10 @@ fn render_file(file: &DiffFile, section_label: &str, file_id: &str) -> String {
 }
 
 fn render_file_tree(snapshot: &DiffSnapshot) -> String {
+    let files = merged_files(snapshot);
     let mut root = TreeDirectory::default();
-    let mut total_count = 0usize;
-
-    for section in &snapshot.sections {
-        for file in &section.files {
-            insert_tree_file(&mut root, file, section.label);
-            total_count += 1;
-        }
+    for file in &files {
+        insert_tree_file(&mut root, file);
     }
     let tree_html = if root.directories.is_empty() && root.files.is_empty() {
         String::from("<div class=\"tree-empty\">Nothing here</div>")
@@ -348,13 +648,13 @@ fn render_file_tree(snapshot: &DiffSnapshot) -> String {
 
     format!(
         "<div class=\"file-tree-shell\"><div class=\"file-tree-header\"><div class=\"file-tree-count\">{}</div></div><label class=\"file-tree-filter\"><input type=\"search\" data-role=\"file-filter\" placeholder=\"Filter files...\" spellcheck=\"false\"></label><div class=\"file-tree-groups\">{}</div></div>",
-        change_label(total_count),
+        change_label(files.len()),
         tree_html,
     )
 }
 
-fn file_dom_id(section_label: &str, path: &str) -> String {
-    format!("{}-{}", slugify(section_label), slugify(path))
+fn file_dom_id(path: &str) -> String {
+    format!("file-{}", slugify(path))
 }
 
 fn slugify(value: &str) -> String {
@@ -384,10 +684,10 @@ struct TreeFileEntry {
     label: String,
     path: String,
     file_id: String,
-    section_label: &'static str,
+    stage: FileStage,
 }
 
-fn insert_tree_file(root: &mut TreeDirectory, file: &DiffFile, section_label: &'static str) {
+fn insert_tree_file(root: &mut TreeDirectory, file: &MergedDiffFile) {
     let mut current = root;
     if let Some(parent) = Path::new(&file.path).parent() {
         for segment in parent
@@ -402,8 +702,8 @@ fn insert_tree_file(root: &mut TreeDirectory, file: &DiffFile, section_label: &'
     current.files.push(TreeFileEntry {
         label: file_name(&file.path),
         path: file.path.clone(),
-        file_id: file_dom_id(section_label, &file.path),
-        section_label,
+        file_id: file_dom_id(&file.path),
+        stage: file.stage,
     });
 }
 
@@ -415,11 +715,7 @@ fn render_tree_directory_contents(directory: &TreeDirectory, depth: usize) -> St
         .collect::<Vec<_>>();
 
     let mut files = directory.files.iter().collect::<Vec<_>>();
-    files.sort_by(|left, right| {
-        left.label
-            .cmp(&right.label)
-            .then(left.section_label.cmp(right.section_label))
-    });
+    files.sort_by(|left, right| left.label.cmp(&right.label));
     rendered.extend(files.into_iter().map(|file| render_tree_file(file, depth)));
     rendered.join("")
 }
@@ -435,21 +731,15 @@ fn render_tree_directory(name: &str, directory: &TreeDirectory, depth: usize) ->
 }
 
 fn render_tree_file(file: &TreeFileEntry, depth: usize) -> String {
-    let stage_class = if file.section_label == "Unstaged" {
-        "tree-stage-unstaged"
-    } else {
-        "tree-stage-staged"
-    };
-
     format!(
         "<button class=\"tree-row tree-file\" type=\"button\" style=\"--depth:{}\" data-file-target=\"{}\" data-filter-text=\"{} {}\"><span class=\"tree-row-spacer\"></span><span class=\"tree-icon tree-icon-file\">{}</span><span class=\"tree-label\">{}</span><span class=\"tree-stage-dot {}\"></span></button>",
         depth,
         escape_html(&file.file_id),
         escape_html(&file.path),
-        escape_html(file.section_label),
+        escape_html(file.stage.meta_label()),
         file_icon(),
         escape_html(&file.label),
-        stage_class,
+        file.stage.tree_class(),
     )
 }
 
@@ -470,11 +760,13 @@ fn file_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-fn render_hunk(hunk: &DiffHunk) -> String {
+fn render_hunk(hunk: &MergedDiffHunk) -> String {
     let rows = render_hunk_rows(&hunk.lines);
     format!(
-        "<div class=\"hunk\"><div class=\"hunk-header\">{}</div><div class=\"diff-grid\">{}</div></div>",
+        "<div class=\"hunk\"><div class=\"hunk-header\"><span class=\"hunk-header-text\">{}</span><span class=\"hunk-stage hunk-stage-{}\">{}</span></div><div class=\"diff-grid\">{}</div></div>",
         escape_html(&hunk.header),
+        hunk.stage.dom_label(),
+        escape_html(hunk.stage.meta_label()),
         rows
     )
 }
@@ -504,7 +796,7 @@ fn render_hunk_rows(lines: &[DiffLine]) -> String {
             }
             let hidden_lines = &context_run[CONTEXT_VISIBLE..context_run.len() - CONTEXT_VISIBLE];
             rendered.push_str(&format!(
-                "<details class=\"context-group\"><summary class=\"row row-gap\" title=\"Expand excerpt\"><div class=\"line gap-line\"><span class=\"gap-icons\"><span class=\"gap-icon gap-icon-up\"></span><span class=\"gap-icon gap-icon-down\"></span></span></div><div class=\"code\"><span class=\"gap-label\">{} unmodified lines</span><span class=\"gap-action\"></span></div></summary><div class=\"context-hidden\">{}</div></details>",
+                "<details class=\"context-group\"><summary class=\"row row-gap\" title=\"Expand excerpt\" data-role=\"context-toggle\" tabindex=\"0\"><div class=\"line gap-line\"><span class=\"gap-control\" aria-hidden=\"true\"><span class=\"gap-control-icon gap-control-icon-up\"></span><span class=\"gap-control-icon gap-control-icon-down\"></span></span><span class=\"gap-popover\"><span class=\"gap-popover-title\">Expand excerpt</span><span class=\"gap-popover-shortcut\">Shift+Enter</span></span></div><div class=\"code\"><span class=\"gap-label\">{} unchanged lines</span><span class=\"gap-action\" data-open-label=\"Hide context\" data-closed-label=\"Show context\"></span></div></summary><div class=\"context-hidden\">{}</div></details>",
                 hidden_lines.len(),
                 hidden_lines
                     .iter()
@@ -547,10 +839,35 @@ fn render_row(line: &DiffLine) -> String {
         );
     }
 
+    let inline_ranges = if line.inline_ranges.is_empty() {
+        String::new()
+    } else {
+        line.inline_ranges
+            .iter()
+            .map(|(start, end)| format!("{start}:{end}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let inline_attrs = if inline_ranges.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " data-inline-ranges=\"{}\" data-inline-kind=\"{}\"",
+            escape_html(&inline_ranges),
+            match line.kind {
+                DiffLineKind::Added => "added",
+                DiffLineKind::Removed => "removed",
+                _ => "",
+            }
+        )
+    };
+
     format!(
-        "<div class=\"row {}\"><div class=\"line\">{}</div><div class=\"code\" data-highlight=\"1\"><span class=\"code-content\">{}</span></div></div>",
+        "<div class=\"row {}\"><div class=\"line\">{}</div><div class=\"code\" data-highlight=\"1\"><span class=\"code-content\" data-source=\"{}\"{}>{}</span></div></div>",
         row_class,
         escape_html(&display_line),
+        escape_html(&line.text),
+        inline_attrs,
         escape_html(&line.text)
     )
 }
@@ -827,11 +1144,14 @@ body.tree-open .file-tree-panel {
   height: 5px;
   border-radius: 999px;
 }
-.tree-stage-unstaged {
+.tree-stage-working {
   background: #7ee7a7;
 }
-.tree-stage-staged {
+.tree-stage-index {
   background: #9ec6ff;
+}
+.tree-stage-both {
+  background: linear-gradient(90deg, #7ee7a7 0 50%, #9ec6ff 50% 100%);
 }
 .tree-empty {
   padding: 6px 6px 6px 20px;
@@ -967,10 +1287,40 @@ body.tree-open .file-tree-panel {
   background: var(--hunk-bg);
 }
 .hunk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 4px 8px;
   background: rgba(29, 30, 34, 0.8);
   color: var(--muted);
   font-size: 10px;
+}
+.hunk-header-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hunk-stage {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  color: #929ba7;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.hunk-stage-working {
+  color: #7ee7a7;
+}
+.hunk-stage-index {
+  color: #9ec6ff;
+}
+.hunk-stage-both {
+  color: #c8ced6;
 }
 .diff-grid {
   display: block;
@@ -1016,6 +1366,17 @@ body.tree-open .file-tree-panel {
   word-break: normal;
   overflow-wrap: normal;
 }
+.inline-diff {
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.inline-diff-added {
+  background: rgba(71, 214, 114, 0.22);
+}
+.inline-diff-removed {
+  background: rgba(255, 96, 96, 0.24);
+}
 .tok-comment { color: #7d8590; font-style: italic; }
 .tok-string { color: #f6c177; }
 .tok-number { color: #8bd5ff; }
@@ -1048,10 +1409,13 @@ body.tree-open .file-tree-panel {
 }
 .context-group {
   display: block;
+  position: relative;
 }
 .context-group > summary {
   list-style: none;
   cursor: pointer;
+  position: relative;
+  outline: none;
 }
 .context-group > summary::marker {
   content: "";
@@ -1063,30 +1427,36 @@ body.tree-open .file-tree-panel {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  overflow: visible;
 }
-.gap-icons {
+.gap-control {
   display: inline-flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 1px;
-  width: 26px;
+  width: 30px;
   min-height: 40px;
   border-radius: 8px;
-  background: rgba(255,255,255,0.04);
-  color: #9aa3ad;
-  transition: background 120ms ease, color 120ms ease;
+  background: rgba(255,255,255,0.05);
+  color: #8f99a5;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
 }
-.row-gap:hover .gap-icons {
-  background: rgba(255,255,255,0.08);
-  color: #c1c8d0;
+.row-gap:hover .gap-control,
+.context-group > summary:focus-visible .gap-control {
+  background: rgba(255,255,255,0.09);
+  color: #c4ccd5;
 }
-.gap-icon {
+.context-group[open] .gap-control {
+  transform: translateY(-1px);
+}
+.gap-control-icon {
   position: relative;
   width: 12px;
   height: 10px;
 }
-.gap-icon::before {
+.gap-control-icon::before {
   position: absolute;
   inset: 0;
   display: flex;
@@ -1095,11 +1465,50 @@ body.tree-open .file-tree-panel {
   font-size: 13px;
   line-height: 1;
 }
-.gap-icon-up::before {
+.gap-control-icon-up::before {
   content: "⌃";
 }
-.gap-icon-down::before {
+.gap-control-icon-down::before {
   content: "⌄";
+}
+.gap-popover {
+  position: absolute;
+  left: 44px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 14px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 14px;
+  background: rgba(56, 60, 69, 0.88);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.22);
+  color: #dbe2ea;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0.9;
+  z-index: 10;
+  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.row-gap:hover .gap-popover,
+.context-group > summary:focus-visible .gap-popover {
+  opacity: 1;
+  background: rgba(62, 66, 76, 0.96);
+  border-color: rgba(255,255,255,0.1);
+}
+.gap-popover-title {
+  font-size: 11px;
+  font-weight: 700;
+}
+.gap-popover-shortcut {
+  color: #abb3be;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.context-group[open] .gap-popover {
+  opacity: 0.72;
 }
 .row-gap .code {
   display: flex;
@@ -1107,36 +1516,52 @@ body.tree-open .file-tree-panel {
   justify-content: space-between;
   gap: 16px;
   padding: 6px 12px;
-  border-radius: 10px;
-  margin: 8px;
-  background: rgba(255,255,255,0.06);
+  border-radius: 0;
+  margin: 0;
+  background: rgba(255,255,255,0.02);
   transition: background 120ms ease, color 120ms ease;
 }
 .row-gap:hover .code {
-  background: rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04);
 }
 .gap-label {
   min-width: 0;
+  color: #a7afb9;
+  font-size: 11px;
 }
 .gap-action {
   flex: none;
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(104, 156, 255, 0.1);
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #9ec6ff;
 }
+.row-gap:hover .gap-action {
+  background: rgba(104, 156, 255, 0.18);
+}
 .context-group[open] .gap-action {
+  background: rgba(255,255,255,0.08);
   color: #aeb7c4;
 }
 .context-group[open] .gap-action::before {
-  content: "Collapse excerpt";
+  content: attr(data-open-label);
 }
 .context-group:not([open]) .gap-action::before {
-  content: "Expand excerpt";
+  content: attr(data-closed-label);
 }
 .context-hidden {
   display: block;
+}
+.context-group > summary:focus-visible .gap-action,
+.context-group > summary:focus-visible .code {
+  box-shadow: inset 0 0 0 1px rgba(104, 156, 255, 0.16);
 }
 .filter-hidden {
   display: none !important;
@@ -1296,10 +1721,42 @@ fn document_js() -> &'static str {
     return out;
   }
 
+  function parseInlineRanges(value) {
+    if (!value) return [];
+    return value.split(',').map((part) => {
+      const [start, end] = part.split(':').map((piece) => Number(piece));
+      return Number.isFinite(start) && Number.isFinite(end) ? [start, end] : null;
+    }).filter(Boolean);
+  }
+
+  function highlightWithInlineRanges(input, language, ranges, kind) {
+    if (!ranges.length) return highlightLine(input, language);
+
+    let cursor = 0;
+    let html = '';
+    ranges.forEach(([start, end]) => {
+      const safeStart = Math.max(cursor, start);
+      const safeEnd = Math.max(safeStart, end);
+      if (cursor < safeStart) {
+        html += highlightLine(input.slice(cursor, safeStart), language);
+      }
+      if (safeStart < safeEnd) {
+        html += `<span class="inline-diff inline-diff-${kind}">${highlightLine(input.slice(safeStart, safeEnd), language)}</span>`;
+      }
+      cursor = safeEnd;
+    });
+    if (cursor < input.length) {
+      html += highlightLine(input.slice(cursor), language);
+    }
+    return html;
+  }
+
   document.querySelectorAll('.code[data-highlight="1"] .code-content').forEach((node) => {
     const language = languageFor(node);
-    const source = node.textContent || "";
-    node.innerHTML = highlightLine(source, language);
+    const source = node.dataset.source || node.textContent || "";
+    const ranges = parseInlineRanges(node.dataset.inlineRanges || "");
+    const kind = node.dataset.inlineKind || "added";
+    node.innerHTML = highlightWithInlineRanges(source, language, ranges, kind);
   });
 
   const body = document.body;
@@ -1330,10 +1787,20 @@ fn document_js() -> &'static str {
     return fileCards.find((card) => card.dataset.fileId === activeId) || null;
   }
 
+  function markActiveFile(fileId) {
+    body.dataset.activeFile = fileId;
+    fileCards.forEach((candidate) => {
+      candidate.classList.toggle('is-active', candidate.dataset.fileId === fileId);
+    });
+    treeFiles.forEach((item) => {
+      item.classList.toggle('is-active', item.dataset.fileTarget === fileId);
+    });
+  }
+
   function firstPreferredCard() {
-    return visibleCards().find((card) => card.dataset.stage === 'Unstaged')
+    return visibleCards().find((card) => card.dataset.stage !== 'index')
       || visibleCards()[0]
-      || fileCards.find((card) => card.dataset.stage === 'Unstaged')
+      || fileCards.find((card) => card.dataset.stage !== 'index')
       || fileCards[0]
       || null;
   }
@@ -1342,21 +1809,44 @@ fn document_js() -> &'static str {
     const card = fileCards.find((candidate) => candidate.dataset.fileId === fileId);
     if (!card) return;
 
-    body.dataset.activeFile = fileId;
-    fileCards.forEach((candidate) => {
-      candidate.classList.toggle('is-active', candidate === card);
-    });
-    treeFiles.forEach((item) => {
-      item.classList.toggle('is-active', item.dataset.fileTarget === fileId);
-    });
+    markActiveFile(fileId);
 
-    if (!card.open) {
+    if (options.open !== false && !card.open) {
       card.open = true;
     }
 
     if (options.scroll) {
       card.scrollIntoView({ block: 'start', behavior: 'auto' });
     }
+  }
+
+  let scrollSelectionFrame = 0;
+  function syncActiveFileFromScroll() {
+    if (scrollSelectionFrame) return;
+    scrollSelectionFrame = window.requestAnimationFrame(() => {
+      scrollSelectionFrame = 0;
+      const candidates = visibleCards().filter((card) => {
+        const rect = card.getBoundingClientRect();
+        return rect.bottom > 56 && rect.top < window.innerHeight - 40;
+      });
+      const pool = candidates.length ? candidates : visibleCards();
+      if (!pool.length) return;
+
+      let best = pool[0];
+      let bestDistance = Number.POSITIVE_INFINITY;
+      pool.forEach((card) => {
+        const rect = card.getBoundingClientRect();
+        const distance = Math.abs(rect.top - 72);
+        if (distance < bestDistance) {
+          best = card;
+          bestDistance = distance;
+        }
+      });
+
+      if (best.dataset.fileId && best.dataset.fileId !== body.dataset.activeFile) {
+        markActiveFile(best.dataset.fileId);
+      }
+    });
   }
 
   function syncToolbar() {
@@ -1415,11 +1905,6 @@ fn document_js() -> &'static str {
       }
     });
 
-    document.querySelectorAll('.file-tree-stage').forEach((section) => {
-      const hasVisibleTreeRow = section.querySelector('.tree-file:not(.filter-hidden), .tree-dir:not(.filter-hidden)');
-      section.classList.toggle('filter-hidden', !hasVisibleTreeRow && !!term);
-    });
-
     fileCards.forEach((card) => {
       const haystack = ((card.dataset.search || '') + ' ' + (card.dataset.stage || '')).toLowerCase();
       const matches = !term || haystack.includes(term);
@@ -1444,6 +1929,28 @@ fn document_js() -> &'static str {
   treeButton?.addEventListener('click', toggleTree);
   fullscreenButton?.addEventListener('click', toggleFullscreen);
   filterInput?.addEventListener('input', applyFilter);
+  window.addEventListener('scroll', syncActiveFileFromScroll, { passive: true });
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Meta' && !event.shiftKey && !event.ctrlKey && !event.altKey) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, true);
+  window.addEventListener('keyup', (event) => {
+    if (event.key === 'Meta' && !event.shiftKey && !event.ctrlKey && !event.altKey) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, true);
+
+  document.querySelectorAll('[data-role="context-toggle"]').forEach((summary) => {
+    summary.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && event.shiftKey) {
+        event.preventDefault();
+        summary.click();
+      }
+    });
+  });
 
   fileCards.forEach((card) => {
     const summary = card.querySelector('summary');
@@ -1466,6 +1973,7 @@ fn document_js() -> &'static str {
   if (preferred) {
     setActiveFile(preferred.dataset.fileId || '', { scroll: false });
   }
+  syncActiveFileFromScroll();
   syncToolbar();
 })();
 "###

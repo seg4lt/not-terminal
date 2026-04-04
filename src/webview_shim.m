@@ -10,6 +10,7 @@ typedef struct rust_webview_s {
     WKWebView *webview;
     NSView *container;
     char *pending_action;
+    id event_monitor;
 } rust_webview_t;
 
 // Custom view class that refuses first responder to prevent keyboard capture
@@ -30,6 +31,26 @@ typedef struct rust_webview_s {
 }
 - (BOOL)becomeFirstResponder {
     return [super becomeFirstResponder];
+}
+- (void)flagsChanged:(NSEvent *)event {
+    if (event == nil) {
+        [super flagsChanged:event];
+        return;
+    }
+
+    NSEventModifierFlags modifiers =
+        [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+    BOOL command = (modifiers & NSEventModifierFlagCommand) != 0;
+    BOOL shift = (modifiers & NSEventModifierFlagShift) != 0;
+    BOOL control = (modifiers & NSEventModifierFlagControl) != 0;
+    BOOL option = (modifiers & NSEventModifierFlagOption) != 0;
+
+    // Prevent bare modifier presses from triggering WKWebView/browser navigation behavior.
+    if (command && !shift && !control && !option) {
+        return;
+    }
+
+    [super flagsChanged:event];
 }
 - (BOOL)performKeyEquivalent:(NSEvent *)event {
     if (event == nil || self.rustWrapper == NULL) {
@@ -160,6 +181,48 @@ void *webview_new(void *parent_ns_view) {
     wrapper->webview = webview;
     wrapper->container = container;
     wrapper->pending_action = NULL;
+    wrapper->event_monitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskFlagsChanged | NSEventMaskKeyDown | NSEventMaskKeyUp)
+                                              handler:^NSEvent *_Nullable(NSEvent *event) {
+                                                  if (event == nil || wrapper->webview == nil) {
+                                                      return event;
+                                                  }
+
+                                                  NSWindow *window = [wrapper->webview window];
+                                                  if (window == nil || [event window] != window) {
+                                                      return event;
+                                                  }
+
+                                                  if (wrapper->container == nil || [wrapper->container isHidden]) {
+                                                      return event;
+                                                  }
+
+                                                  NSEventModifierFlags modifiers =
+                                                      [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+                                                  BOOL command = (modifiers & NSEventModifierFlagCommand) != 0;
+                                                  BOOL shift = (modifiers & NSEventModifierFlagShift) != 0;
+                                                  BOOL control = (modifiers & NSEventModifierFlagControl) != 0;
+                                                  BOOL option = (modifiers & NSEventModifierFlagOption) != 0;
+                                                  unsigned short keyCode = [event keyCode];
+
+                                                  // Swallow bare command key presses/releases while the diff webview is visible.
+                                                  if ([event type] == NSEventTypeFlagsChanged &&
+                                                      (keyCode == 54 || keyCode == 55) &&
+                                                      (!shift && !control && !option)) {
+                                                      return nil;
+                                                  }
+
+                                                  // Also guard the synthetic Meta key events some web content surfaces generate.
+                                                  if (([event type] == NSEventTypeKeyDown || [event type] == NSEventTypeKeyUp) &&
+                                                      command && !shift && !control && !option) {
+                                                      NSString *characters = [event charactersIgnoringModifiers];
+                                                      if (characters == nil || [characters length] == 0) {
+                                                          return nil;
+                                                      }
+                                                  }
+
+                                                  return event;
+                                              }];
 
     return (void *)wrapper;
 }
@@ -184,6 +247,11 @@ void webview_free(void *webview_ptr) {
         [wrapper->container removeFromSuperview];
         [wrapper->container release];
         wrapper->container = nil;
+    }
+
+    if (wrapper->event_monitor != nil) {
+        [NSEvent removeMonitor:wrapper->event_monitor];
+        wrapper->event_monitor = nil;
     }
 
     if (wrapper->pending_action != NULL) {
