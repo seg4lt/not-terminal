@@ -67,6 +67,7 @@ root.innerHTML = `
         </div>
       </div>
     </aside>
+    <div class="panel-splitter" data-role="panel-splitter"></div>
     <section class="preview-panel">
       <div class="panel-header preview-header">
         <div class="preview-heading">
@@ -106,6 +107,8 @@ const previewSubtitle = root.querySelector("[data-role='preview-subtitle']");
 const previewStatus = root.querySelector("[data-role='preview-status']");
 const previewScroll = root.querySelector("[data-role='preview-scroll']");
 const previewSurface = root.querySelector("[data-role='preview-surface']");
+const panelSplitter = root.querySelector("[data-role='panel-splitter']");
+const searchLayout = root.querySelector(".search-layout");
 
 const state = {
   loading: false,
@@ -1370,6 +1373,39 @@ root.querySelector("[data-action='close-search']").addEventListener("click", () 
   postAction("toggle-project-search-view"),
 );
 
+// Splitter drag to resize results panel
+{
+  const SPLITTER_MIN = 150;
+  const SPLITTER_MAX = 600;
+  let dragging = false;
+
+  panelSplitter.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    dragging = true;
+    panelSplitter.classList.add("active");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const layoutRect = searchLayout.getBoundingClientRect();
+    const x = e.clientX - layoutRect.left;
+    const clamped = Math.max(SPLITTER_MIN, Math.min(SPLITTER_MAX, x));
+    searchLayout.style.setProperty("--results-width", clamped + "px");
+    queueTreeRender();
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    panelSplitter.classList.remove("active");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  });
+}
+
 window.__NOT_TERMINAL_SEARCH_SET_RESULTS__ = setResults;
 window.__NOT_TERMINAL_SEARCH_SET_PREVIEW__ = setPreview;
 window.__NOT_TERMINAL_SEARCH_SET_LOADING__ = setLoading;
@@ -1600,7 +1636,7 @@ function injectStyle() {
     .search-layout {
       min-height: 0;
       display: grid;
-      grid-template-columns: 300px minmax(0, 1fr);
+      grid-template-columns: var(--results-width, 300px) auto minmax(0, 1fr);
       grid-template-rows: 1fr;
     }
     .results-panel {
@@ -1608,8 +1644,19 @@ function injectStyle() {
       min-height: 0;
       display: grid;
       grid-template-rows: auto 1fr;
-      border-right: 1px solid var(--border);
       background: linear-gradient(180deg, rgba(255,255,255,0.015), transparent 45%);
+    }
+    .panel-splitter {
+      width: 5px;
+      cursor: col-resize;
+      background: var(--border);
+      transition: background 0.15s;
+      position: relative;
+      z-index: 2;
+    }
+    .panel-splitter:hover,
+    .panel-splitter.active {
+      background: var(--accent);
     }
     .preview-panel {
       min-width: 0;
