@@ -625,7 +625,7 @@ fn render_file(file: &MergedDiffFile) -> String {
     let open_attr = " open";
 
     format!(
-        "<details id=\"{}\" class=\"file-card\" data-language=\"{}\" data-file-id=\"{}\" data-stage=\"{}\" data-search=\"{} {}\"{}><summary><span class=\"file-main\"><span class=\"file-path\">{}</span><span class=\"file-stage-meta\">{}</span></span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\">{}</div></details>",
+        "<details id=\"{}\" class=\"file-card\" data-language=\"{}\" data-file-id=\"{}\" data-stage=\"{}\" data-search=\"{} {}\"{}><summary><span class=\"file-main\"><span class=\"file-path\">{}</span><span class=\"file-stage-meta\">{}</span></span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\"><div class=\"file-body-inner\">{}</div></div></details>",
         escape_html(&file_id),
         language,
         escape_html(&file_id),
@@ -1436,6 +1436,9 @@ body.tree-open .file-tree-panel {
   padding: 0 0 6px;
   overflow-x: auto;
 }
+.file-body-inner {
+  min-width: max-content;
+}
 .hunk {
   margin-top: 6px;
   padding-top: 4px;
@@ -1455,7 +1458,7 @@ body.tree-open .file-tree-panel {
 }
 .row {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 56px minmax(0, 1fr);
   align-items: stretch;
   min-height: 24px;
 }
