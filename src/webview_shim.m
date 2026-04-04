@@ -11,6 +11,7 @@ typedef struct rust_webview_s {
     NSView *container;
     char *pending_action;
     id event_monitor;
+    id mouse_monitor;
 } rust_webview_t;
 
 // Custom view class that refuses first responder to prevent keyboard capture
@@ -38,7 +39,22 @@ typedef struct rust_webview_s {
     return self.keyboardEnabled;
 }
 - (BOOL)becomeFirstResponder {
+    if (!self.keyboardEnabled) {
+        return NO;
+    }
     return [super becomeFirstResponder];
+}
+- (void)keyDown:(NSEvent *)event {
+    if (!self.keyboardEnabled) {
+        return;
+    }
+    [super keyDown:event];
+}
+- (void)keyUp:(NSEvent *)event {
+    if (!self.keyboardEnabled) {
+        return;
+    }
+    [super keyUp:event];
 }
 - (void)flagsChanged:(NSEvent *)event {
     if (event == nil) {
@@ -205,6 +221,21 @@ void *webview_new(void *parent_ns_view) {
                                                       return event;
                                                   }
 
+                                                  // When keyboard is disabled for this webview, ensure
+                                                  // neither the WKWebView nor any of its internal subviews
+                                                  // (e.g. WKContentView) hold first-responder status.
+                                                  // Reclaim focus so the event reaches the terminal instead.
+                                                  if (![(KeyboardCapableWKWebView *)wrapper->webview keyboardEnabled]) {
+                                                      NSResponder *fr = [window firstResponder];
+                                                      if (fr != nil && [fr isKindOfClass:[NSView class]]) {
+                                                          NSView *frView = (NSView *)fr;
+                                                          if (frView == wrapper->webview || [frView isDescendantOf:wrapper->webview]) {
+                                                              [window makeFirstResponder:nil];
+                                                          }
+                                                      }
+                                                      return event;
+                                                  }
+
                                                   NSEventModifierFlags modifiers =
                                                       [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
                                                   BOOL command = (modifiers & NSEventModifierFlagCommand) != 0;
@@ -228,6 +259,43 @@ void *webview_new(void *parent_ns_view) {
                                                           return nil;
                                                       }
                                                   }
+
+                                                  return event;
+                                              }];
+
+    // When keyboard is disabled, undo any focus changes that mouse clicks on
+    // the webview (or its internal subviews like WKContentView) cause.
+    // The click still reaches the web content (so buttons/links work) but the
+    // terminal retains first-responder status.
+    wrapper->mouse_monitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
+                                              handler:^NSEvent *_Nullable(NSEvent *event) {
+                                                  if (event == nil || wrapper->webview == nil ||
+                                                      wrapper->container == nil || [wrapper->container isHidden]) {
+                                                      return event;
+                                                  }
+                                                  if ([(KeyboardCapableWKWebView *)wrapper->webview keyboardEnabled]) {
+                                                      return event;
+                                                  }
+
+                                                  NSWindow *window = [wrapper->webview window];
+                                                  if (window == nil || [event window] != window) {
+                                                      return event;
+                                                  }
+
+                                                  NSResponder *saved = [window firstResponder];
+                                                  // After the click is processed, restore the
+                                                  // previous first responder if the webview stole it.
+                                                  dispatch_async(dispatch_get_main_queue(), ^{
+                                                      if (window == nil || saved == nil) return;
+                                                      NSResponder *current = [window firstResponder];
+                                                      if (current == saved) return;
+                                                      if (![current isKindOfClass:[NSView class]]) return;
+                                                      NSView *frView = (NSView *)current;
+                                                      if (frView == wrapper->webview || [frView isDescendantOf:wrapper->webview]) {
+                                                          [window makeFirstResponder:saved];
+                                                      }
+                                                  });
 
                                                   return event;
                                               }];
@@ -260,6 +328,11 @@ void webview_free(void *webview_ptr) {
     if (wrapper->event_monitor != nil) {
         [NSEvent removeMonitor:wrapper->event_monitor];
         wrapper->event_monitor = nil;
+    }
+
+    if (wrapper->mouse_monitor != nil) {
+        [NSEvent removeMonitor:wrapper->mouse_monitor];
+        wrapper->mouse_monitor = nil;
     }
 
     if (wrapper->pending_action != NULL) {

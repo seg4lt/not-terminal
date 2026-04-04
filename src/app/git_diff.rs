@@ -2061,12 +2061,8 @@ fn document_js() -> &'static str {
       applyFilter();
     }
 
-    if (Array.isArray(state.openFiles)) {
-      const openFiles = new Set(state.openFiles);
-      fileCards.forEach((card) => {
-        card.open = openFiles.has(card.dataset.fileId || "");
-      });
-    }
+    // Note: openFiles and excerpts are intentionally NOT restored so that
+    // the default "all expanded" state is preserved on every reload.
 
     if (Array.isArray(state.openTreeGroups)) {
       const openTreeGroups = new Set(state.openTreeGroups);
@@ -2074,17 +2070,6 @@ fn document_js() -> &'static str {
         group.open = openTreeGroups.has(group.dataset.treeId || "");
       });
     }
-
-    const excerpts = Array.isArray(state.excerpts) ? state.excerpts : [];
-    excerpts.forEach((excerpt) => {
-      const group = Array.from(document.querySelectorAll('.context-group')).find(
-        (candidate) => candidate.dataset.excerptId === (excerpt.id || "")
-      );
-      if (!group) return;
-      group.dataset.excerptHead = String(Math.max(0, Number(excerpt.head || 0)));
-      group.dataset.excerptTail = String(Math.max(0, Number(excerpt.tail || 0)));
-      updateExcerpt(group);
-    });
 
     if (typeof state.activeFile === 'string' && state.activeFile) {
       setActiveFile(state.activeFile, { scroll: false, open: false });
@@ -2123,8 +2108,7 @@ fn document_js() -> &'static str {
   }
 
   function initializeExcerpt(group) {
-    const total = excerptRows(group).length;
-    group.dataset.excerptHead = String(total);
+    group.dataset.excerptHead = '0';
     group.dataset.excerptTail = '0';
     updateExcerpt(group);
   }
