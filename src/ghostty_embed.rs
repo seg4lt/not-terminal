@@ -311,6 +311,7 @@ mod macos {
             visible: bool,
             count: i32,
         );
+        fn rust_ghostty_parent_view_reclaim_focus(parent_ns_view: *mut c_void);
         fn rust_ghostty_take_pending_attention_badge_click() -> bool;
         fn rust_ghostty_host_view_free(host_ns_view: *mut c_void);
         fn rust_ghostty_disable_system_hide_shortcuts();
@@ -806,6 +807,16 @@ mod macos {
                 visible,
                 count,
             );
+        }
+    }
+
+    pub fn parent_view_reclaim_focus(parent_ns_view: usize) {
+        if parent_ns_view == 0 {
+            return;
+        }
+
+        unsafe {
+            rust_ghostty_parent_view_reclaim_focus(parent_ns_view as *mut c_void);
         }
     }
 
@@ -1351,7 +1362,7 @@ mod macos {
 pub use macos::{
     GhosttyEmbed, disable_system_hide_shortcuts, host_view_focus_search, host_view_focus_terminal,
     host_view_free, host_view_new, host_view_set_frame, host_view_set_hidden,
-    host_view_set_search_active, host_view_set_split_badge, ns_view_ptr,
+    host_view_set_search_active, host_view_set_split_badge, ns_view_ptr, parent_view_reclaim_focus,
     parent_view_set_attention_badge, register_focus_toggle_hotkey,
     take_pending_attention_badge_click,
 };
@@ -1426,6 +1437,9 @@ pub fn host_view_set_split_badge(_host_ns_view: usize, _visible: bool, _active: 
 
 #[cfg(not(target_os = "macos"))]
 pub fn parent_view_set_attention_badge(_parent_ns_view: usize, _visible: bool, _count: i32) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn parent_view_reclaim_focus(_parent_ns_view: usize) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn take_pending_attention_badge_click() -> bool {

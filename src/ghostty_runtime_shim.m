@@ -1255,6 +1255,25 @@ void rust_ghostty_parent_view_set_attention_badge(void *parent_ns_view,
   [label setHidden:NO];
 }
 
+void rust_ghostty_parent_view_reclaim_focus(void *parent_ns_view) {
+  if (parent_ns_view == NULL) {
+    return;
+  }
+
+  NSView *parent = (NSView *)parent_ns_view;
+  NSWindow *window = [parent window];
+  if (window == nil) {
+    return;
+  }
+
+  NSResponder *fr = [window firstResponder];
+  if (fr == (NSResponder *)parent) {
+    return;
+  }
+
+  [window makeFirstResponder:parent];
+}
+
 bool rust_ghostty_take_pending_attention_badge_click(void) {
   return atomic_exchange_explicit(&rust_ghostty_attention_badge_clicked,
                                   false,

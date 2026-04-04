@@ -12,7 +12,8 @@ use crate::app::runtime::{
 };
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyProgressReportState, GhosttyRuntimeAction, host_view_focus_terminal,
-    host_view_free, host_view_new, ns_view_ptr, parent_view_set_attention_badge,
+    host_view_free, host_view_new, ns_view_ptr, parent_view_reclaim_focus,
+    parent_view_set_attention_badge,
 };
 use crate::webview::WebView;
 use iced::{
@@ -2054,6 +2055,15 @@ impl App {
             let visible = self.sidebar_state.is_hidden() && !modal_open && attention_count > 0;
             let count = attention_count.min(i32::MAX as usize) as i32;
             parent_view_set_attention_badge(parent_ns_view, visible, count);
+
+            // When a modal is open, ensure the winit content view holds macOS
+            // first-responder status.  Native child views (Ghostty terminals,
+            // WKWebViews) may have claimed it; without this, keyDown: events
+            // are dispatched to the native view instead of winit/Iced, making
+            // the modal text input unresponsive.
+            if modal_open {
+                parent_view_reclaim_focus(parent_ns_view);
+            }
         }
 
         // Sync browser webviews - only the active one is visible
@@ -2352,7 +2362,12 @@ impl App {
                             .is_some_and(RuntimeSession::close_diff_view);
                         if changed {
                             self.clear_diff_refresh_state(&terminal_id);
-                            if let Some(host_view) = self.active_terminal_host_view() {
+                            // If another input surface opened while the diff-close action was
+                            // waiting to be processed (for example Cmd+P opening the command
+                            // palette), do not steal first responder back to the terminal.
+                            if !self.modal_open()
+                                && let Some(host_view) = self.active_terminal_host_view()
+                            {
                                 host_view_focus_terminal(host_view);
                             }
                         }
