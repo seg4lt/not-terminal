@@ -297,6 +297,7 @@ fn render_section(section: &DiffSection) -> String {
 }
 
 fn render_file(file: &DiffFile) -> String {
+    let language = infer_language(&file.path);
     let hunks = if file.hunks.is_empty() {
         "<div class=\"file-empty\">No textual changes to display.</div>".to_string()
     } else {
@@ -308,7 +309,8 @@ fn render_file(file: &DiffFile) -> String {
     };
 
     format!(
-        "<details class=\"file-card\" open><summary><span class=\"file-path\">{}</span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\">{}</div></details>",
+        "<details class=\"file-card\" data-language=\"{}\" open><summary><span class=\"file-path\">{}</span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\">{}</div></details>",
+        language,
         escape_html(&file.path),
         file.added,
         file.removed,
@@ -348,9 +350,15 @@ fn render_hunk_rows(lines: &[DiffLine]) -> String {
             for line in &context_run[..CONTEXT_VISIBLE] {
                 rendered.push_str(&render_row(line));
             }
+            let hidden_lines = &context_run[CONTEXT_VISIBLE..context_run.len() - CONTEXT_VISIBLE];
             rendered.push_str(&format!(
-                "<div class=\"row row-gap\"><div class=\"line old\"></div><div class=\"line new\"></div><div class=\"code\">{} unmodified lines</div></div>",
-                context_run.len() - (CONTEXT_VISIBLE * 2)
+                "<details class=\"context-group\"><summary class=\"row row-gap\"><div class=\"line gap-line\"><span class=\"gap-caret\"></span></div><div class=\"code\"><span class=\"gap-label\">{} unmodified lines</span><span class=\"gap-action\"></span></div></summary><div class=\"context-hidden\">{}</div></details>",
+                hidden_lines.len(),
+                hidden_lines
+                    .iter()
+                    .map(render_row)
+                    .collect::<Vec<_>>()
+                    .join("")
             ));
             for line in &context_run[context_run.len() - CONTEXT_VISIBLE..] {
                 rendered.push_str(&render_row(line));
@@ -366,33 +374,32 @@ fn render_hunk_rows(lines: &[DiffLine]) -> String {
 }
 
 fn render_row(line: &DiffLine) -> String {
-    let (row_class, sign) = match line.kind {
-        DiffLineKind::Context => ("row-context", " "),
-        DiffLineKind::Added => ("row-added", "+"),
-        DiffLineKind::Removed => ("row-removed", "-"),
-        DiffLineKind::Note => ("row-note", ""),
+    let row_class = match line.kind {
+        DiffLineKind::Context => "row-context",
+        DiffLineKind::Added => "row-added",
+        DiffLineKind::Removed => "row-removed",
+        DiffLineKind::Note => "row-note",
     };
 
-    let old_line = line
-        .old_line
-        .map(|value| value.to_string())
-        .unwrap_or_default();
-    let new_line = line
+    let display_line = line
         .new_line
+        .or(line.old_line)
         .map(|value| value.to_string())
         .unwrap_or_default();
-    let text = if line.kind == DiffLineKind::Note {
-        format!("\\ {}", line.text)
-    } else {
-        format!("{sign}{}", line.text)
-    };
+    if line.kind == DiffLineKind::Note {
+        return format!(
+            "<div class=\"row {}\"><div class=\"line\">{}</div><div class=\"code\">{}</div></div>",
+            row_class,
+            escape_html(&display_line),
+            escape_html(&format!(r#"\ {}"#, line.text))
+        );
+    }
 
     format!(
-        "<div class=\"row {}\"><div class=\"line old\">{}</div><div class=\"line new\">{}</div><div class=\"code\">{}</div></div>",
+        "<div class=\"row {}\"><div class=\"line\">{}</div><div class=\"code\" data-highlight=\"1\"><span class=\"code-content\">{}</span></div></div>",
         row_class,
-        escape_html(&old_line),
-        escape_html(&new_line),
-        escape_html(&text)
+        escape_html(&display_line),
+        escape_html(&line.text)
     )
 }
 
@@ -407,10 +414,11 @@ fn repo_title(worktree_path: &str) -> String {
 
 fn render_document(title: &str, body: &str) -> String {
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{}</title><style>{}</style></head><body>{}</body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{}</title><style>{}</style></head><body>{}<script>{}</script></body></html>",
         escape_html(title),
         document_css(),
-        body
+        body,
+        document_js()
     )
 }
 
@@ -553,7 +561,7 @@ body {
 }
 .row {
   display: grid;
-  grid-template-columns: 68px 68px minmax(0, 1fr);
+  grid-template-columns: 96px minmax(0, 1fr);
   align-items: stretch;
   min-height: 24px;
 }
@@ -566,25 +574,50 @@ body {
   text-align: right;
   border-right: 1px solid rgba(55, 57, 62, 0.65);
   user-select: none;
+  -webkit-user-select: none;
+}
+.row .line,
+.row .line * {
+  -webkit-touch-callout: none;
+}
+.row .line::selection,
+.row .line *::selection {
+  background: transparent;
+}
+.row-added .line {
+  color: #42d17f;
+  background: rgba(71, 214, 114, 0.12);
+  border-left: 4px solid var(--green-edge);
+}
+.row-removed .line {
+  color: #ff5f61;
+  background: rgba(255, 96, 96, 0.12);
+  border-left: 4px solid var(--red-edge);
 }
 .row .code {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.tok-comment { color: #7d8590; font-style: italic; }
+.tok-string { color: #f6c177; }
+.tok-number { color: #8bd5ff; }
+.tok-keyword { color: #b388ff; font-weight: 600; }
+.tok-type { color: #7ee7d8; }
+.tok-fn { color: #ffad66; }
+.tok-const { color: #ff7aa2; }
+.tok-macro { color: #9bd0ff; }
+.tok-attr { color: #8bcf7b; }
+.tok-operator { color: #d1d7e0; }
+.tok-punct { color: #aab2bf; }
+.tok-plain { color: inherit; }
 .row-context {
   background: var(--ctx-bg);
 }
 .row-added {
   background: linear-gradient(90deg, rgba(71, 214, 114, 0.16) 0%, var(--green-bg) 100%);
 }
-.row-added .line.old {
-  border-left: 4px solid var(--green-edge);
-}
 .row-removed {
   background: linear-gradient(90deg, rgba(255, 96, 96, 0.18) 0%, var(--red-bg) 100%);
-}
-.row-removed .line.old {
-  border-left: 4px solid var(--red-edge);
 }
 .row-note {
   background: rgba(34, 35, 39, 0.94);
@@ -595,13 +628,261 @@ body {
   background: var(--gap-bg);
   color: #c0c5cc;
 }
+.context-group {
+  display: block;
+}
+.context-group > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.context-group > summary::marker {
+  content: "";
+}
+.context-group > summary::-webkit-details-marker {
+  display: none;
+}
+.gap-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gap-caret::before {
+  content: "▾";
+  color: #b7bcc6;
+  font-size: 14px;
+  line-height: 1;
+}
+.context-group[open] .gap-caret::before {
+  content: "▴";
+}
 .row-gap .code {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   padding: 6px 12px;
   border-radius: 10px;
   margin: 8px;
   background: rgba(255,255,255,0.06);
+  transition: background 120ms ease, color 120ms ease;
+}
+.row-gap:hover .code {
+  background: rgba(255,255,255,0.1);
+}
+.gap-label {
+  min-width: 0;
+}
+.gap-action {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9ec6ff;
+}
+.context-group[open] .gap-action {
+  color: #aeb7c4;
+}
+.context-group[open] .gap-action::before {
+  content: "Collapse";
+}
+.context-group:not([open]) .gap-action::before {
+  content: "Expand";
+}
+.context-hidden {
+  display: block;
 }
 "#
+}
+
+fn document_js() -> &'static str {
+    r###"
+(function () {
+  const KEYWORDS = {
+    rust: new Set(["as","async","await","break","const","continue","crate","dyn","else","enum","extern","false","fn","for","if","impl","in","let","loop","match","mod","move","mut","pub","ref","return","self","Self","static","struct","super","trait","true","type","unsafe","use","where","while"]),
+    js: new Set(["async","await","break","case","catch","class","const","continue","default","else","export","extends","false","finally","for","from","function","if","import","in","let","new","null","return","static","super","switch","this","throw","true","try","typeof","undefined","var","while","yield"]),
+    json: new Set(["true","false","null"]),
+    toml: new Set(["true","false"])
+  };
+
+  const TYPES = {
+    rust: /^[A-Z][A-Za-z0-9_]*$/,
+    js: /^(Promise|Array|Object|Map|Set|Date|Error|RegExp|String|Number|Boolean)$/
+  };
+
+  const FN_CALL = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const OPERATORS = new Set(["=", ">", "<", "!", "+", "-", "*", "/", "%", "&", "|", "^", "~", "?", ":"]);
+  const PUNCT = new Set(["(", ")", "[", "]", "{", "}", ".", ",", ";"]);
+
+  function escapeHtml(value) {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function languageFor(element) {
+    return element.closest(".file-card")?.dataset.language || "plain";
+  }
+
+  function keywordSet(language) {
+    if (language === "ts" || language === "tsx" || language === "jsx") return KEYWORDS.js;
+    return KEYWORDS[language] || new Set();
+  }
+
+  function typePattern(language) {
+    if (language === "ts" || language === "tsx" || language === "jsx") return TYPES.js;
+    return TYPES[language];
+  }
+
+  function token(className, value) {
+    if (!value) return "";
+    return `<span class="${className}">${escapeHtml(value)}</span>`;
+  }
+
+  function isIdentifierStart(ch) {
+    return /[A-Za-z_]/.test(ch);
+  }
+
+  function isIdentifierPart(ch) {
+    return /[A-Za-z0-9_]/.test(ch);
+  }
+
+  function readWhile(input, index, predicate) {
+    let end = index;
+    while (end < input.length && predicate(input[end])) end += 1;
+    return input.slice(index, end);
+  }
+
+  function renderIdentifier(input, start, language) {
+    const value = readWhile(input, start, isIdentifierPart);
+    const next = input[start + value.length];
+    const previous = start > 0 ? input[start - 1] : "";
+    const keywords = keywordSet(language);
+    const typeMatcher = typePattern(language);
+
+    if (previous === "#") return [token("tok-attr", value), value.length];
+    if (next === "!") return [token("tok-macro", value) + token("tok-operator", "!"), value.length + 1];
+    if (keywords.has(value)) return [token("tok-keyword", value), value.length];
+    if (typeMatcher && typeMatcher.test(value)) return [token("tok-type", value), value.length];
+    if (/^[A-Z0-9_]+$/.test(value) && value.length > 1) return [token("tok-const", value), value.length];
+
+    const rest = input.slice(start + value.length);
+    const fnMatch = rest.match(/^(\s*)(\()/);
+    if (FN_CALL.test(value) && fnMatch) {
+      return [token("tok-fn", value), value.length];
+    }
+
+    return [token("tok-plain", value), value.length];
+  }
+
+  function highlightLine(input, language) {
+    let index = 0;
+    let out = "";
+
+    while (index < input.length) {
+      const ch = input[index];
+      const next = input[index + 1] || "";
+
+      if ((language === "rust" || language === "js" || language === "ts" || language === "tsx" || language === "jsx") && ch === "/" && next === "/") {
+        out += token("tok-comment", input.slice(index));
+        break;
+      }
+
+      if ((language === "py" || language === "toml" || language === "yaml" || language === "yml" || language === "sh" || language === "bash") && ch === "#") {
+        out += token("tok-comment", input.slice(index));
+        break;
+      }
+
+      if (ch === "\"" || ch === "'" || ch === "`") {
+        let end = index + 1;
+        let escaped = false;
+        while (end < input.length) {
+          const current = input[end];
+          if (!escaped && current === ch) {
+            end += 1;
+            break;
+          }
+          escaped = !escaped && current === "\\";
+          if (!escaped && current !== "\\") escaped = false;
+          end += 1;
+        }
+        out += token("tok-string", input.slice(index, end));
+        index = end;
+        continue;
+      }
+
+      if (/[0-9]/.test(ch)) {
+        const value = readWhile(input, index, (c) => /[0-9A-Fa-f_xob\.]/.test(c));
+        out += token("tok-number", value);
+        index += value.length;
+        continue;
+      }
+
+      if (isIdentifierStart(ch)) {
+        const [rendered, consumed] = renderIdentifier(input, index, language);
+        out += rendered;
+        index += consumed;
+        continue;
+      }
+
+      if (OPERATORS.has(ch)) {
+        out += token("tok-operator", ch);
+        index += 1;
+        continue;
+      }
+
+      if (PUNCT.has(ch)) {
+        out += token("tok-punct", ch);
+        index += 1;
+        continue;
+      }
+
+      out += escapeHtml(ch);
+      index += 1;
+    }
+
+    return out;
+  }
+
+  document.querySelectorAll('.code[data-highlight="1"] .code-content').forEach((node) => {
+    const language = languageFor(node);
+    const source = node.textContent || "";
+    node.innerHTML = highlightLine(source, language);
+  });
+})();
+"###
+}
+
+fn infer_language(path: &str) -> &'static str {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    match extension.as_str() {
+        "rs" => "rust",
+        "js" | "mjs" | "cjs" => "js",
+        "ts" => "ts",
+        "tsx" => "tsx",
+        "jsx" => "jsx",
+        "json" => "json",
+        "toml" => "toml",
+        "py" => "py",
+        "go" => "go",
+        "java" => "java",
+        "kt" => "kotlin",
+        "swift" => "swift",
+        "c" | "h" | "m" | "mm" | "cc" | "cpp" | "hpp" => "cpp",
+        "zig" => "zig",
+        "sh" | "zsh" | "bash" => "sh",
+        "yml" | "yaml" => "yaml",
+        "md" => "md",
+        _ => "plain",
+    }
 }
 
 fn escape_html(value: &str) -> String {
