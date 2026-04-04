@@ -20,6 +20,17 @@ typedef struct rust_webview_s {
 }
 @end
 
+@interface NonFirstResponderWKWebView : WKWebView
+@end
+@implementation NonFirstResponderWKWebView
+- (BOOL)acceptsFirstResponder {
+    return NO;
+}
+- (BOOL)becomeFirstResponder {
+    return NO;
+}
+@end
+
 // Create a new webview hosted in a container view
 void *webview_new(void *parent_ns_view) {
     if (parent_ns_view == NULL) {
@@ -47,7 +58,7 @@ void *webview_new(void *parent_ns_view) {
     }
 
     // Create the WKWebView
-    WKWebView *webview = [[WKWebView alloc] initWithFrame:frame configuration:config];
+    WKWebView *webview = [[NonFirstResponderWKWebView alloc] initWithFrame:frame configuration:config];
     if (webview == nil) {
         [config release];
         [container release];
@@ -123,6 +134,24 @@ void webview_load_url(void *webview_ptr, const char *url_cstr) {
 
     NSURLRequest *request = [NSURLRequest requestWithURL:url];
     [wrapper->webview loadRequest:request];
+}
+
+void webview_load_html(void *webview_ptr, const char *html_cstr) {
+    if (webview_ptr == NULL || html_cstr == NULL) {
+        return;
+    }
+
+    rust_webview_t *wrapper = (rust_webview_t *)webview_ptr;
+    if (wrapper->webview == nil) {
+        return;
+    }
+
+    NSString *html = [NSString stringWithUTF8String:html_cstr];
+    if (html == nil) {
+        return;
+    }
+
+    [wrapper->webview loadHTMLString:html baseURL:nil];
 }
 
 // Navigate back in history

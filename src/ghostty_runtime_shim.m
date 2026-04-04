@@ -501,16 +501,9 @@ static NSView *rust_ghostty_find_focusable_terminal_view(NSView *view);
     candidate = _host;
   }
 
-  dispatch_async(dispatch_get_main_queue(), ^{
-    NSWindow *strongWindow = [_host window];
-    if (strongWindow == nil) {
-      return;
-    }
-
-    if (candidate != nil) {
-      [strongWindow makeFirstResponder:candidate];
-    }
-  });
+  if (candidate != nil) {
+    [window makeFirstResponder:candidate];
+  }
 }
 
 - (void)deactivate {
@@ -729,7 +722,16 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
       break;
     }
     case GHOSTTY_ACTION_START_SEARCH: {
+      action_event.tag = RUST_GHOSTTY_ACTION_START_SEARCH;
       const char *needle = action.action.start_search.needle;
+      if (needle != NULL) {
+        strncpy(action_event.text_copy, needle, sizeof(action_event.text_copy) - 1);
+        action_event.text_copy[sizeof(action_event.text_copy) - 1] = '\0';
+        action_event.ptr = (uintptr_t)action_event.text_copy;
+      } else {
+        action_event.text_copy[0] = '\0';
+        action_event.ptr = 0;
+      }
       if (surface_host != nil) {
         char *needle_copy = (needle != NULL) ? strdup(needle) : NULL;
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -747,19 +749,21 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
           }
         });
       }
-      return true;
+      break;
     }
     case GHOSTTY_ACTION_END_SEARCH:
+      action_event.tag = RUST_GHOSTTY_ACTION_END_SEARCH;
       if (surface_host != nil) {
         dispatch_async(dispatch_get_main_queue(), ^{
           RustGhosttySearchOverlayController *controller =
               rust_ghostty_search_overlay_controller(surface_host, false);
           [controller hide];
-          [controller restoreTerminalFocus];
         });
       }
-      return true;
+      break;
     case GHOSTTY_ACTION_SEARCH_TOTAL:
+      action_event.tag = RUST_GHOSTTY_ACTION_SEARCH_TOTAL;
+      action_event.arg0 = (intptr_t)action.action.search_total.total;
       if (surface_host != nil) {
         const ssize_t total = action.action.search_total.total;
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -768,8 +772,10 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
           [controller setSearchTotal:(NSInteger)total hasTotal:(total >= 0)];
         });
       }
-      return true;
+      break;
     case GHOSTTY_ACTION_SEARCH_SELECTED:
+      action_event.tag = RUST_GHOSTTY_ACTION_SEARCH_SELECTED;
+      action_event.arg0 = (intptr_t)action.action.search_selected.selected;
       if (surface_host != nil) {
         const ssize_t selected = action.action.search_selected.selected;
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -778,7 +784,7 @@ static bool rust_ghostty_action_cb(ghostty_app_t app,
           [controller setSearchSelected:(NSInteger)selected hasSelected:(selected >= 0)];
         });
       }
-      return true;
+      break;
     default:
       return false;
   }

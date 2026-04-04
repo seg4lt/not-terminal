@@ -1,3 +1,4 @@
+use crate::app::diff_runtime::DiffPaneRuntime;
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyGotoSplitDirection, GhosttyResizeSplitDirection, GhosttyRuntimeAction,
     GhosttySplitDirection, host_view_free, host_view_set_frame, host_view_set_hidden,
@@ -43,6 +44,12 @@ pub(crate) struct TickOutcome {
     pub(crate) layout_changed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiffPaneToggle {
+    Opened,
+    Closed,
+}
+
 pub(crate) struct PaneRuntime {
     pub(crate) id: String,
     pub(crate) host_view: usize,
@@ -83,8 +90,43 @@ impl Drop for PaneRuntime {
     }
 }
 
+pub(crate) enum SessionPane {
+    Terminal(PaneRuntime),
+    Diff(DiffPaneRuntime),
+}
+
+impl SessionPane {
+    fn terminal(&self) -> Option<&PaneRuntime> {
+        match self {
+            Self::Terminal(pane) => Some(pane),
+            Self::Diff(_) => None,
+        }
+    }
+
+    fn terminal_mut(&mut self) -> Option<&mut PaneRuntime> {
+        match self {
+            Self::Terminal(pane) => Some(pane),
+            Self::Diff(_) => None,
+        }
+    }
+
+    fn diff(&self) -> Option<&DiffPaneRuntime> {
+        match self {
+            Self::Terminal(_) => None,
+            Self::Diff(pane) => Some(pane),
+        }
+    }
+
+    fn diff_mut(&mut self) -> Option<&mut DiffPaneRuntime> {
+        match self {
+            Self::Terminal(_) => None,
+            Self::Diff(pane) => Some(pane),
+        }
+    }
+}
+
 pub(crate) struct RuntimeSession {
-    panes: HashMap<String, PaneRuntime>,
+    panes: HashMap<String, SessionPane>,
     root: SplitNode,
     active_pane_id: String,
     zoomed_pane_id: Option<String>,
@@ -98,7 +140,7 @@ impl RuntimeSession {
     pub(crate) fn new(initial_pane: PaneRuntime) -> Self {
         let root_id = initial_pane.id.clone();
         let mut panes = HashMap::new();
-        panes.insert(root_id.clone(), initial_pane);
+        panes.insert(root_id.clone(), SessionPane::Terminal(initial_pane));
 
         Self {
             panes,
@@ -109,20 +151,26 @@ impl RuntimeSession {
     }
 
     pub(crate) fn active_ghostty_mut(&mut self) -> Option<&mut GhosttyEmbed> {
+        let pane_id = self.active_terminal_pane_id()?;
         self.panes
-            .get_mut(&self.active_pane_id)
+            .get_mut(&pane_id)
+            .and_then(SessionPane::terminal_mut)
             .map(|pane| &mut pane.ghostty)
     }
 
     pub(crate) fn active_surface_ptr(&self) -> Option<usize> {
+        let pane_id = self.active_terminal_pane_id()?;
         self.panes
-            .get(&self.active_pane_id)
+            .get(&pane_id)
+            .and_then(SessionPane::terminal)
             .map(PaneRuntime::surface_ptr)
     }
 
     pub(crate) fn active_host_view(&self) -> Option<usize> {
+        let pane_id = self.active_terminal_pane_id()?;
         self.panes
-            .get(&self.active_pane_id)
+            .get(&pane_id)
+            .and_then(SessionPane::terminal)
             .map(|pane| pane.host_view)
     }
 
@@ -132,6 +180,7 @@ impl RuntimeSession {
     ) -> Option<&mut GhosttyEmbed> {
         self.panes
             .values_mut()
+            .filter_map(SessionPane::terminal_mut)
             .find(|pane| pane.surface_ptr() == surface_ptr)
             .map(|pane| &mut pane.ghostty)
     }
@@ -140,12 +189,24 @@ impl RuntimeSession {
         self.panes.len() > 1
     }
 
+    pub(crate) fn has_diff_view(&self) -> bool {
+        self.diff_pane_id().is_some()
+    }
+
+    pub(crate) fn diff_worktree_path(&self) -> Option<String> {
+        self.panes
+            .values()
+            .find_map(SessionPane::diff)
+            .map(|pane| pane.worktree_path.clone())
+    }
+
     pub(crate) fn tick_all(&mut self) -> TickOutcome {
         // Fast path: check if ANY pane has pending work before iterating
         // This avoids FFI calls when no terminal has data to process
         let has_any_pending = self
             .panes
             .values()
+            .filter_map(SessionPane::terminal)
             .any(|pane| pane.ghostty.has_pending_tick());
 
         if !has_any_pending {
@@ -153,8 +214,11 @@ impl RuntimeSession {
             let exited: Vec<String> = self
                 .panes
                 .iter()
-                .filter(|(_, pane)| pane.ghostty.process_exited())
-                .map(|(pane_id, _)| pane_id.clone())
+                .filter_map(|(pane_id, pane)| {
+                    pane.terminal()
+                        .is_some_and(|terminal| terminal.ghostty.process_exited())
+                        .then_some(pane_id.clone())
+                })
                 .collect();
 
             if exited.is_empty() {
@@ -165,7 +229,7 @@ impl RuntimeSession {
             // Handle exited panes only
             let mut changed = false;
             for pane_id in exited {
-                if self.panes.len() > 1 {
+                if self.terminal_leaf_ids().len() > 1 {
                     changed |= self.remove_pane(&pane_id);
                 }
             }
@@ -181,7 +245,11 @@ impl RuntimeSession {
 
         // At least one pane has pending work - process all panes
         let mut had_pending_work = false;
-        for pane in self.panes.values_mut() {
+        for pane in self
+            .panes
+            .values_mut()
+            .filter_map(SessionPane::terminal_mut)
+        {
             if pane.ghostty.has_pending_tick() {
                 had_pending_work = true;
             }
@@ -192,14 +260,16 @@ impl RuntimeSession {
         let exited: Vec<String> = self
             .panes
             .iter()
-            .filter(|(_, pane)| pane.ghostty.process_exited())
-            .map(|(pane_id, _)| pane_id.clone())
+            .filter_map(|(pane_id, pane)| {
+                pane.terminal()
+                    .is_some_and(|terminal| terminal.ghostty.process_exited())
+                    .then_some(pane_id.clone())
+            })
             .collect();
 
         let mut changed = false;
         for pane_id in exited {
-            // Only remove if there's more than one pane (i.e., it's a split)
-            if self.panes.len() > 1 {
+            if self.terminal_leaf_ids().len() > 1 {
                 changed |= self.remove_pane(&pane_id);
             }
         }
@@ -216,7 +286,11 @@ impl RuntimeSession {
 
     pub(crate) fn drain_actions(&mut self) -> Vec<GhosttyRuntimeAction> {
         let mut actions = Vec::new();
-        for pane in self.panes.values_mut() {
+        for pane in self
+            .panes
+            .values_mut()
+            .filter_map(SessionPane::terminal_mut)
+        {
             actions.extend(pane.ghostty.drain_actions());
         }
         actions
@@ -233,23 +307,7 @@ impl RuntimeSession {
     ) {
         if !visible {
             for pane in self.panes.values_mut() {
-                if pane.last_hidden != Some(true) {
-                    host_view_set_hidden(pane.host_view, true);
-                    pane.last_hidden = Some(true);
-                }
-                if pane.last_split_badge != Some((false, false)) {
-                    host_view_set_split_badge(pane.host_view, false, false);
-                    pane.last_split_badge = Some((false, false));
-                }
-                if pane.last_focus != Some(false) {
-                    host_view_set_search_active(pane.host_view, false);
-                    pane.ghostty.set_focus(false);
-                    pane.last_focus = Some(false);
-                }
-                if pane.last_occluded != Some(false) {
-                    pane.ghostty.set_occlusion(false);
-                    pane.last_occluded = Some(false);
-                }
+                hide_session_pane(pane);
             }
             return;
         }
@@ -263,88 +321,91 @@ impl RuntimeSession {
                 .find(|(id, _)| id == pane_id)
                 .map(|(_, rect)| *rect)
             else {
-                if pane.last_hidden != Some(true) {
-                    host_view_set_hidden(pane.host_view, true);
-                    pane.last_hidden = Some(true);
-                }
-                if pane.last_split_badge != Some((false, false)) {
-                    host_view_set_split_badge(pane.host_view, false, false);
-                    pane.last_split_badge = Some((false, false));
-                }
-                if pane.last_focus != Some(false) {
-                    host_view_set_search_active(pane.host_view, false);
-                    pane.ghostty.set_focus(false);
-                    pane.last_focus = Some(false);
-                }
-                if pane.last_occluded != Some(false) {
-                    pane.ghostty.set_occlusion(false);
-                    pane.last_occluded = Some(false);
-                }
+                hide_session_pane(pane);
                 continue;
             };
 
-            let frame = (
-                (frame_x + rect.x) as f64,
-                (frame_y + rect.y) as f64,
-                rect.width.max(1.0) as f64,
-                rect.height.max(1.0) as f64,
-            );
-            let frame_changed = pane.last_frame != Some(frame);
-            if frame_changed {
-                host_view_set_frame(pane.host_view, frame.0, frame.1, frame.2, frame.3);
-                pane.last_frame = Some(frame);
-            }
+            match pane {
+                SessionPane::Terminal(pane) => {
+                    let frame = (
+                        (frame_x + rect.x) as f64,
+                        (frame_y + rect.y) as f64,
+                        rect.width.max(1.0) as f64,
+                        rect.height.max(1.0) as f64,
+                    );
+                    let frame_changed = pane.last_frame != Some(frame);
+                    if frame_changed {
+                        host_view_set_frame(pane.host_view, frame.0, frame.1, frame.2, frame.3);
+                        pane.last_frame = Some(frame);
+                    }
 
-            let hidden_changed = pane.last_hidden != Some(false);
-            if hidden_changed {
-                host_view_set_hidden(pane.host_view, false);
-                pane.last_hidden = Some(false);
-            }
-            let occlusion_changed = pane.last_occluded != Some(true);
-            if occlusion_changed {
-                pane.ghostty.set_occlusion(true);
-                pane.last_occluded = Some(true);
-            }
+                    let hidden_changed = pane.last_hidden != Some(false);
+                    if hidden_changed {
+                        host_view_set_hidden(pane.host_view, false);
+                        pane.last_hidden = Some(false);
+                    }
+                    let occlusion_changed = pane.last_occluded != Some(true);
+                    if occlusion_changed {
+                        pane.ghostty.set_occlusion(true);
+                        pane.last_occluded = Some(true);
+                    }
 
-            let width_px = (rect.width.max(1.0) as f64 * scale).round().max(1.0) as u32;
-            let height_px = (rect.height.max(1.0) as f64 * scale).round().max(1.0) as u32;
-            let scale_changed = pane.last_scale != Some(scale);
-            if scale_changed {
-                pane.ghostty.set_scale_factor(scale);
-                pane.last_scale = Some(scale);
-            }
+                    let width_px = (rect.width.max(1.0) as f64 * scale).round().max(1.0) as u32;
+                    let height_px = (rect.height.max(1.0) as f64 * scale).round().max(1.0) as u32;
+                    let scale_changed = pane.last_scale != Some(scale);
+                    if scale_changed {
+                        pane.ghostty.set_scale_factor(scale);
+                        pane.last_scale = Some(scale);
+                    }
 
-            let size = (width_px, height_px);
-            let size_changed = pane.last_size_px != Some(size);
-            if size_changed {
-                pane.ghostty.set_size(width_px, height_px);
-                pane.last_size_px = Some(size);
-            }
+                    let size = (width_px, height_px);
+                    let size_changed = pane.last_size_px != Some(size);
+                    if size_changed {
+                        pane.ghostty.set_size(width_px, height_px);
+                        pane.last_size_px = Some(size);
+                    }
 
-            let focused = pane_id == &self.active_pane_id;
-            let focus_changed = pane.last_focus != Some(focused);
-            if focus_changed {
-                host_view_set_search_active(pane.host_view, focused);
-                pane.ghostty.set_focus(focused);
-                pane.last_focus = Some(focused);
-            }
+                    let focused = pane_id == &self.active_pane_id;
+                    let focus_changed = pane.last_focus != Some(focused);
+                    if focus_changed {
+                        host_view_set_search_active(pane.host_view, focused);
+                        pane.ghostty.set_focus(focused);
+                        pane.last_focus = Some(focused);
+                    }
 
-            // Split indicator is shown in the sidebar tree, not inside the terminal surface.
-            let split_badge = (false, focused);
-            if has_splits || pane.last_split_badge != Some(split_badge) {
-                host_view_set_split_badge(pane.host_view, split_badge.0, split_badge.1);
-                pane.last_split_badge = Some(split_badge);
-            }
+                    let split_badge = (false, focused);
+                    if has_splits || pane.last_split_badge != Some(split_badge) {
+                        host_view_set_split_badge(pane.host_view, split_badge.0, split_badge.1);
+                        pane.last_split_badge = Some(split_badge);
+                    }
 
-            if focused
-                && (frame_changed
-                    || hidden_changed
-                    || scale_changed
-                    || size_changed
-                    || occlusion_changed
-                    || focus_changed)
-            {
-                pane.ghostty.refresh();
+                    if focused
+                        && (frame_changed
+                            || hidden_changed
+                            || scale_changed
+                            || size_changed
+                            || occlusion_changed
+                            || focus_changed)
+                    {
+                        pane.ghostty.refresh();
+                    }
+                }
+                SessionPane::Diff(pane) => {
+                    let frame = (
+                        (frame_x + rect.x) as f64,
+                        (frame_y + rect.y) as f64,
+                        rect.width.max(1.0) as f64,
+                        rect.height.max(1.0) as f64,
+                    );
+                    if pane.last_frame != Some(frame) {
+                        pane.webview.set_frame(frame.0, frame.1, frame.2, frame.3);
+                        pane.last_frame = Some(frame);
+                    }
+                    if pane.last_hidden != Some(false) {
+                        pane.webview.set_hidden(false);
+                        pane.last_hidden = Some(false);
+                    }
+                }
             }
         }
     }
@@ -356,10 +417,9 @@ impl RuntimeSession {
         width: f32,
         height: f32,
     ) -> Option<(f64, f64)> {
+        let active_id = self.active_terminal_pane_id()?;
         let layout = self.compute_layout(width, height);
-        let (_, rect) = layout
-            .iter()
-            .find(|(pane_id, _)| pane_id == &self.active_pane_id)?;
+        let (_, rect) = layout.iter().find(|(pane_id, _)| pane_id == &active_id)?;
 
         if x < rect.x || x >= rect.x + rect.width || y < rect.y || y >= rect.y + rect.height {
             return None;
@@ -376,8 +436,12 @@ impl RuntimeSession {
         height: f32,
     ) -> Option<(f64, f64, bool)> {
         let layout = self.compute_layout(width, height);
-        let (pane_id, rect) = layout.iter().find(|(_, rect)| {
-            x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+        let (pane_id, rect) = layout.iter().find(|(pane_id, rect)| {
+            self.is_terminal_pane_id(pane_id)
+                && x >= rect.x
+                && x < rect.x + rect.width
+                && y >= rect.y
+                && y < rect.y + rect.height
         })?;
 
         let changed = self.active_pane_id != *pane_id;
@@ -487,9 +551,62 @@ impl RuntimeSession {
             return false;
         }
 
-        self.panes.insert(new_id.clone(), new_pane);
+        self.panes
+            .insert(new_id.clone(), SessionPane::Terminal(new_pane));
         self.active_pane_id = new_id;
         self.zoomed_pane_id = None;
+        true
+    }
+
+    pub(crate) fn toggle_diff_right(
+        &mut self,
+        diff_pane: DiffPaneRuntime,
+    ) -> Option<DiffPaneToggle> {
+        let source_id = self.active_terminal_pane_id()?;
+        let worktree_path = diff_pane.worktree_path.clone();
+
+        if let Some(existing_id) = self.diff_pane_id() {
+            let is_same = self
+                .panes
+                .get(&existing_id)
+                .and_then(SessionPane::diff)
+                .is_some_and(|pane| pane.worktree_path == worktree_path);
+            self.remove_pane(&existing_id);
+            if is_same {
+                self.active_pane_id = source_id;
+                return Some(DiffPaneToggle::Closed);
+            }
+        }
+
+        let new_id = diff_pane.id.clone();
+        let replacement = SplitNode::Branch {
+            axis: SplitAxis::Vertical,
+            ratio: 0.5,
+            first: Box::new(SplitNode::Leaf(source_id.clone())),
+            second: Box::new(SplitNode::Leaf(new_id.clone())),
+        };
+
+        if !replace_leaf(&mut self.root, &source_id, replacement) {
+            return None;
+        }
+
+        self.panes.insert(new_id, SessionPane::Diff(diff_pane));
+        self.active_pane_id = source_id;
+        self.zoomed_pane_id = None;
+        Some(DiffPaneToggle::Opened)
+    }
+
+    pub(crate) fn update_diff_html(&mut self, worktree_path: &str, html: &str) -> bool {
+        let Some(pane) = self
+            .panes
+            .values_mut()
+            .find_map(SessionPane::diff_mut)
+            .filter(|pane| pane.worktree_path == worktree_path)
+        else {
+            return false;
+        };
+
+        pane.webview.load_html(html);
         true
     }
 
@@ -509,7 +626,7 @@ impl RuntimeSession {
 
         match direction {
             GhosttyGotoSplitDirection::Previous | GhosttyGotoSplitDirection::Next => {
-                let order = in_order_leaf_ids(&self.root);
+                let order = self.terminal_leaf_ids();
                 if order.len() <= 1 {
                     return false;
                 }
@@ -549,7 +666,7 @@ impl RuntimeSession {
                 let mut best: Option<(&String, f32)> = None;
 
                 for (candidate_id, candidate_rect) in &layout {
-                    if candidate_id == &source_id {
+                    if candidate_id == &source_id || !self.is_terminal_pane_id(candidate_id) {
                         continue;
                     }
 
@@ -673,6 +790,7 @@ impl RuntimeSession {
 
         self.panes
             .values()
+            .filter_map(SessionPane::terminal)
             .find(|pane| pane.surface_ptr() == surface_ptr)
             .map(|pane| pane.id.clone())
     }
@@ -696,7 +814,9 @@ impl RuntimeSession {
         self.panes.remove(pane_id);
 
         if self.active_pane_id == pane_id {
-            if let Some(next_active) = in_order_leaf_ids(&self.root).first() {
+            if let Some(next_active) = self.terminal_leaf_ids().first().cloned() {
+                self.active_pane_id = next_active;
+            } else if let Some(next_active) = in_order_leaf_ids(&self.root).first() {
                 self.active_pane_id = next_active.clone();
             }
         }
@@ -751,6 +871,63 @@ impl RuntimeSession {
             &mut result,
         );
         result
+    }
+
+    fn active_terminal_pane_id(&self) -> Option<String> {
+        if self.is_terminal_pane_id(&self.active_pane_id) {
+            Some(self.active_pane_id.clone())
+        } else {
+            self.terminal_leaf_ids().into_iter().next()
+        }
+    }
+
+    fn diff_pane_id(&self) -> Option<String> {
+        self.panes
+            .iter()
+            .find_map(|(pane_id, pane)| pane.diff().map(|_| pane_id.clone()))
+    }
+
+    fn is_terminal_pane_id(&self, pane_id: &str) -> bool {
+        self.panes
+            .get(pane_id)
+            .is_some_and(|pane| matches!(pane, SessionPane::Terminal(_)))
+    }
+
+    fn terminal_leaf_ids(&self) -> Vec<String> {
+        in_order_leaf_ids(&self.root)
+            .into_iter()
+            .filter(|pane_id| self.is_terminal_pane_id(pane_id))
+            .collect()
+    }
+}
+
+fn hide_session_pane(pane: &mut SessionPane) {
+    match pane {
+        SessionPane::Terminal(pane) => {
+            if pane.last_hidden != Some(true) {
+                host_view_set_hidden(pane.host_view, true);
+                pane.last_hidden = Some(true);
+            }
+            if pane.last_split_badge != Some((false, false)) {
+                host_view_set_split_badge(pane.host_view, false, false);
+                pane.last_split_badge = Some((false, false));
+            }
+            if pane.last_focus != Some(false) {
+                host_view_set_search_active(pane.host_view, false);
+                pane.ghostty.set_focus(false);
+                pane.last_focus = Some(false);
+            }
+            if pane.last_occluded != Some(false) {
+                pane.ghostty.set_occlusion(false);
+                pane.last_occluded = Some(false);
+            }
+        }
+        SessionPane::Diff(pane) => {
+            if pane.last_hidden != Some(true) {
+                pane.webview.set_hidden(true);
+                pane.last_hidden = Some(true);
+            }
+        }
     }
 }
 

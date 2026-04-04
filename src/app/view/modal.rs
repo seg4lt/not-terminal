@@ -885,6 +885,7 @@ pub(super) fn modal_overlay(app: &App) -> Option<Element<'_, Message>> {
                 text("Cmd+Shift+O: Open active worktree in secondary editor").size(12),
                 text("Cmd+P: Quick open").size(12),
                 text("Cmd+Shift+P: Command palette").size(12),
+                text("Cmd+Shift+D: Toggle diff split").size(12),
                 text("Cmd+Option+Shift+O: Toggle app focus").size(12),
                 text("Quick Open: Cmd+Backspace closes selected terminal").size(12),
                 container(text("Cmd+B: New browser").size(12)).style(move |_| ContainerStyle {

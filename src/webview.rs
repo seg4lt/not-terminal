@@ -8,6 +8,7 @@ unsafe extern "C" {
     fn webview_new(parent_ns_view: usize) -> *mut ();
     fn webview_free(webview_ptr: *mut ());
     fn webview_load_url(webview_ptr: *mut (), url_cstr: *const i8);
+    fn webview_load_html(webview_ptr: *mut (), html_cstr: *const i8);
     fn webview_go_back(webview_ptr: *mut ());
     fn webview_go_forward(webview_ptr: *mut ());
     fn webview_reload(webview_ptr: *mut ());
@@ -15,10 +16,14 @@ unsafe extern "C" {
     fn webview_set_hidden(webview_ptr: *mut (), hidden: bool);
     fn webview_can_go_back(webview_ptr: *mut ()) -> bool;
     fn webview_can_go_forward(webview_ptr: *mut ()) -> bool;
+    #[allow(dead_code)]
     fn webview_get_url(webview_ptr: *mut ()) -> *mut i8;
+    #[allow(dead_code)]
     fn webview_get_title(webview_ptr: *mut ()) -> *mut i8;
     fn webview_open_dev_tools(webview_ptr: *mut ());
+    #[allow(dead_code)]
     fn webview_lose_focus(webview_ptr: *mut ());
+    #[allow(dead_code)]
     fn free(ptr: *mut std::ffi::c_void);
 }
 
@@ -58,6 +63,16 @@ impl WebView {
         };
         unsafe {
             webview_load_url(self.ptr.as_ptr(), url_cstr.as_ptr());
+        }
+    }
+
+    /// Load inline HTML into the webview.
+    pub fn load_html(&self, html: &str) {
+        let Ok(html_cstr) = std::ffi::CString::new(html) else {
+            return;
+        };
+        unsafe {
+            webview_load_html(self.ptr.as_ptr(), html_cstr.as_ptr());
         }
     }
 
@@ -107,6 +122,7 @@ impl WebView {
     }
 
     /// Get current URL
+    #[allow(dead_code)]
     pub fn get_url(&self) -> Option<String> {
         unsafe {
             let ptr = webview_get_url(self.ptr.as_ptr());
@@ -122,6 +138,7 @@ impl WebView {
     }
 
     /// Get current page title
+    #[allow(dead_code)]
     pub fn get_title(&self) -> Option<String> {
         unsafe {
             let ptr = webview_get_title(self.ptr.as_ptr());
@@ -144,6 +161,7 @@ impl WebView {
     }
 
     /// Make the webview lose focus
+    #[allow(dead_code)]
     pub fn lose_focus(&self) {
         unsafe {
             webview_lose_focus(self.ptr.as_ptr());

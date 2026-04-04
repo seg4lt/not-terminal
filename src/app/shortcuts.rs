@@ -11,6 +11,7 @@ pub(crate) enum ShortcutAction {
     OpenInSecondaryEditor,
     OpenQuickOpen,
     OpenCommandPalette,
+    ToggleDiffView,
     OpenPreferences,
     AddBrowser,
     BrowserDevTools,
@@ -133,6 +134,10 @@ pub(crate) fn detect_shortcut(
             return Some(ShortcutAction::OpenInSecondaryEditor);
         }
 
+        if is_key_d(key_char.as_deref(), physical_key) {
+            return Some(ShortcutAction::ToggleDiffView);
+        }
+
         if is_bracket_right(key_char.as_deref(), physical_key) {
             return Some(ShortcutAction::NextTerminal);
         }
@@ -231,6 +236,10 @@ fn is_key_o(value: Option<&str>, physical: &Physical) -> bool {
 
 fn is_key_b(value: Option<&str>, physical: &Physical) -> bool {
     is_letter(value, "b") || matches!(physical, Physical::Code(Code::KeyB))
+}
+
+fn is_key_d(value: Option<&str>, physical: &Physical) -> bool {
+    is_letter(value, "d") || matches!(physical, Physical::Code(Code::KeyD))
 }
 
 fn is_key_i(value: Option<&str>, physical: &Physical) -> bool {

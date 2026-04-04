@@ -1,4 +1,6 @@
+mod diff_runtime;
 mod git_branch;
+mod git_diff;
 mod git_worktrees;
 mod model;
 mod persistence;

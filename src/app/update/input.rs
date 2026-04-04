@@ -82,6 +82,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
                 | ShortcutAction::OpenInSecondaryEditor
                 | ShortcutAction::OpenQuickOpen
                 | ShortcutAction::OpenCommandPalette
+                | ShortcutAction::ToggleDiffView
                 | ShortcutAction::OpenPreferences
                 | ShortcutAction::AddBrowser
                 | ShortcutAction::BrowserDevTools
@@ -107,6 +108,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
         let terminal_id_clone = active_terminal_id.as_ref().cloned();
         if let Some(ref terminal_id) = terminal_id_clone {
             app.clear_awaiting_on_activity(terminal_id);
+            let _ = app.schedule_diff_refresh(terminal_id, Instant::now());
         }
         let mut should_refresh_branch = false;
         if let Some(ghostty) = app.active_ghostty_mut()
@@ -134,6 +136,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
     let terminal_id_clone = active_terminal_id.as_ref().cloned();
     if let Some(ref terminal_id) = terminal_id_clone {
         app.clear_awaiting_on_activity(terminal_id);
+        let _ = app.schedule_diff_refresh(terminal_id, Instant::now());
     }
     if let Some(ghostty) = app.active_ghostty_mut()
         && ghostty.handle_keyboard_event(&event)
@@ -367,6 +370,7 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
         ShortcutAction::OpenCommandPalette => {
             super::update(app, Message::OpenCommandPalette(!app.command_palette_open))
         }
+        ShortcutAction::ToggleDiffView => super::update(app, Message::ToggleDiffView),
         ShortcutAction::OpenPreferences => super::update(app, Message::OpenPreferences(true)),
         ShortcutAction::AddBrowser => super::update(app, Message::AddBrowser),
         ShortcutAction::BrowserDevTools => super::update(app, Message::BrowserDevTools),

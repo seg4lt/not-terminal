@@ -1,3 +1,5 @@
+use crate::app::diff_runtime::DiffPaneRuntime;
+use crate::app::git_diff::DiffSnapshot;
 use crate::app::git_worktrees::{add_worktree, remove_worktree, scan_worktrees};
 use crate::app::model::{
     BrowserRecord, PersistedState, PinnedTerminalRecord, ProjectRecord, TerminalRecord,
@@ -51,6 +53,7 @@ pub(crate) const DELETE_WORKTREE_SCROLL_ID: &str = "delete-worktree-scroll";
 pub(crate) const MAX_PINNED_TERMINALS: usize = 9;
 const BRANCH_REFRESH_INTERVAL: Duration = Duration::from_millis(350);
 pub(crate) const TERMINAL_SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
+pub(crate) const DIFF_REFRESH_DEBOUNCE: Duration = Duration::from_millis(350);
 
 /// Represents the different states of the sidebar
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,6 +367,10 @@ pub(crate) struct App {
     pub(crate) terminal_activity_frame: usize,
     /// Browser webviews by ID
     pub(crate) browser_webviews: HashMap<String, WebView>,
+    /// Debounced diff refresh deadlines by terminal session.
+    pub(crate) diff_refresh_deadlines: HashMap<String, Instant>,
+    /// Terminal sessions with an in-flight diff request.
+    pub(crate) diff_refresh_in_flight: HashSet<String>,
     /// Ephemeral terminal search state for the active Ghostty surface.
     pub(crate) terminal_search: Option<TerminalSearchState>,
 }
@@ -501,6 +508,12 @@ pub(crate) enum Message {
     BrowserForward,
     BrowserReload,
     BrowserDevTools,
+    ToggleDiffView,
+    DiffDataLoaded {
+        terminal_id: String,
+        worktree_path: String,
+        result: Result<DiffSnapshot, String>,
+    },
 }
 
 impl App {
@@ -553,6 +566,8 @@ impl App {
             terminal_titles: HashMap::new(),
             terminal_activity_frame: 0,
             browser_webviews: HashMap::new(),
+            diff_refresh_deadlines: HashMap::new(),
+            diff_refresh_in_flight: HashSet::new(),
             terminal_search: None,
         };
 
@@ -2108,6 +2123,68 @@ impl App {
         Ok(PaneRuntime::new(create_id("pane"), host_view, ghostty))
     }
 
+    pub(crate) fn create_diff_pane_runtime(
+        &self,
+        worktree_path: &str,
+    ) -> Result<DiffPaneRuntime, String> {
+        let Some(parent_ns_view) = self.host_ns_view else {
+            return Err(String::from("failed to resolve host NSView"));
+        };
+
+        let Some(webview) = WebView::new_hosted(parent_ns_view) else {
+            return Err(String::from("failed to create diff webview"));
+        };
+
+        Ok(DiffPaneRuntime::new(
+            create_id("diff"),
+            webview,
+            worktree_path.to_string(),
+        ))
+    }
+
+    pub(crate) fn schedule_diff_refresh(&mut self, terminal_id: &str, now: Instant) -> bool {
+        let should_refresh = self
+            .runtimes
+            .get(terminal_id)
+            .is_some_and(RuntimeSession::has_diff_view);
+        if !should_refresh {
+            return false;
+        }
+
+        self.diff_refresh_deadlines
+            .insert(terminal_id.to_string(), now + DIFF_REFRESH_DEBOUNCE);
+        true
+    }
+
+    pub(crate) fn clear_diff_refresh_state(&mut self, terminal_id: &str) {
+        self.diff_refresh_deadlines.remove(terminal_id);
+        self.diff_refresh_in_flight.remove(terminal_id);
+    }
+
+    pub(crate) fn begin_diff_refresh(&mut self, terminal_id: &str) -> Option<String> {
+        if !self
+            .runtimes
+            .get(terminal_id)
+            .is_some_and(RuntimeSession::has_diff_view)
+        {
+            self.clear_diff_refresh_state(terminal_id);
+            return None;
+        }
+
+        if self.diff_refresh_in_flight.contains(terminal_id) {
+            return None;
+        }
+
+        let worktree_path = self.runtimes.get(terminal_id)?.diff_worktree_path()?;
+        self.diff_refresh_deadlines.remove(terminal_id);
+        self.diff_refresh_in_flight.insert(terminal_id.to_string());
+        Some(worktree_path)
+    }
+
+    pub(crate) fn finish_diff_refresh(&mut self, terminal_id: &str) {
+        self.diff_refresh_in_flight.remove(terminal_id);
+    }
+
     pub(crate) fn process_runtime_actions(&mut self) -> bool {
         let mut changed = false;
         let terminal_ids: Vec<String> = self.runtimes.keys().cloned().collect();
@@ -2255,6 +2332,7 @@ impl App {
         }
         self.runtimes.remove(terminal_id);
         self.branch_by_terminal.remove(terminal_id);
+        self.clear_diff_refresh_state(terminal_id);
         self.remove_terminal_status(terminal_id);
     }
 

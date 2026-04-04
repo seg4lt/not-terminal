@@ -1,4 +1,6 @@
 use super::state::{App, Message};
+use crate::app::git_diff;
+use crate::app::runtime::DiffPaneToggle;
 use crate::app::shortcuts::ShortcutAction;
 use crate::app::state::{
     AddProjectOutcome, COMMAND_PALETTE_SCROLL_ID, CommandPaletteAction, ProjectRescanSummary,
@@ -68,6 +70,10 @@ fn rescan_status(summary: &ProjectRescanSummary, startup: bool) -> String {
 }
 
 pub(super) fn terminal_search_focus_task(app: &mut App) -> Task<Message> {
+    if app.modal_open() || app.active_browser().is_some() {
+        return Task::none();
+    }
+
     if app.take_terminal_search_focus_request()
         && let Some(host_view) = app.active_terminal_host_view()
     {
@@ -164,16 +170,22 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
             let mut layout_changed = false;
             let mut had_any_work = false;
+            let now = Instant::now();
 
-            for runtime in app.runtimes.values_mut() {
+            let runtime_ids: Vec<String> = app.runtimes.keys().cloned().collect();
+            for terminal_id in runtime_ids {
+                let Some(runtime) = app.runtimes.get_mut(&terminal_id) else {
+                    continue;
+                };
                 let tick = runtime.tick_all();
                 if tick.had_pending_work {
                     had_any_work = true;
+                    let _ = app.schedule_diff_refresh(&terminal_id, now);
                 }
                 layout_changed |= tick.layout_changed;
             }
 
-            let search_applied = app.apply_terminal_search_if_due(Instant::now());
+            let search_applied = app.apply_terminal_search_if_due(now);
             if app.process_runtime_actions() || layout_changed {
                 app.sync_runtime_views();
             }
@@ -186,7 +198,10 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.advance_terminal_activity_frame();
             }
 
-            terminal_search_focus_task(app)
+            Task::batch([
+                terminal_search_focus_task(app),
+                flush_due_diff_refresh_tasks(app, now),
+            ])
         }
         Message::Keyboard(event) => input::handle_keyboard(app, event),
         Message::Mouse(event) => input::handle_mouse(app, event),
@@ -327,7 +342,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.select_terminal(&project_id, &terminal_id);
                 app.sync_runtime_views();
                 app.status = String::from("Terminal added");
-                app.save_task()
+                Task::batch([app.save_task(), refresh_active_diff_now_task(app)])
             } else {
                 Task::none()
             }
@@ -340,7 +355,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.select_detached_terminal(&terminal_id);
             app.sync_runtime_views();
             app.status = String::from("Detached terminal added");
-            app.save_task()
+            Task::batch([app.save_task(), refresh_active_diff_now_task(app)])
         }
         Message::CloseActiveTerminal => {
             if app.close_active_terminal() {
@@ -369,7 +384,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.status = error;
             }
             app.sync_runtime_views();
-            app.save_task()
+            Task::batch([app.save_task(), refresh_active_diff_now_task(app)])
         }
         Message::SelectDetachedTerminal(terminal_id) => {
             app.select_detached_terminal(&terminal_id);
@@ -377,7 +392,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.status = error;
             }
             app.sync_runtime_views();
-            app.save_task()
+            Task::batch([app.save_task(), refresh_active_diff_now_task(app)])
         }
         Message::TogglePinnedTerminal(terminal_id) => {
             if app.is_terminal_pinned(&terminal_id) {
@@ -420,7 +435,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.status = error;
             }
             app.sync_runtime_views();
-            app.save_task()
+            Task::batch([app.save_task(), refresh_active_diff_now_task(app)])
         }
         Message::SelectPinnedTerminalSlot(slot) => {
             let Some(terminal_id) = app.select_pinned_terminal_slot(slot) else {
@@ -434,7 +449,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.status = error;
             }
             app.sync_runtime_views();
-            app.save_task()
+            Task::batch([app.save_task(), refresh_active_diff_now_task(app)])
         }
         Message::RemoveTerminal {
             project_id,
@@ -453,6 +468,9 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.save_task()
         }
         Message::OpenPreferences(open) => {
+            if open {
+                let _ = app.close_terminal_search(true);
+            }
             app.preferences_open = open;
             if open {
                 app.command_palette_open = false;
@@ -471,6 +489,9 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::OpenCommandPalette(open) => {
+            if open {
+                let _ = app.close_terminal_search(true);
+            }
             app.command_palette_open = open;
             if open {
                 app.command_palette_query.clear();
@@ -534,6 +555,9 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::RunCommandPaletteAction(action) => activate_command_palette_action(app, action),
         Message::OpenQuickOpen(open) => {
+            if open {
+                let _ = app.close_terminal_search(true);
+            }
             app.quick_open_open = open;
             if open {
                 app.quick_open_query.clear();
@@ -584,7 +608,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 app.quick_open_query.clear();
                 app.quick_open_selected_index = 0;
                 app.sync_runtime_views();
-                return app.save_task();
+                return Task::batch([app.save_task(), refresh_active_diff_now_task(app)]);
             }
             Task::none()
         }
@@ -601,7 +625,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.quick_open_query.clear();
             app.quick_open_selected_index = 0;
             app.sync_runtime_views();
-            app.save_task()
+            Task::batch([app.save_task(), refresh_active_diff_now_task(app)])
         }
         Message::QuickOpenCloseTerminal(terminal_id) => {
             if app.close_terminal_by_id(&terminal_id) {
@@ -1250,7 +1274,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             app.switch_terminal_by_offset(offset);
             app.ensure_active_runtime();
             app.sync_runtime_views();
-            app.save_task()
+            Task::batch([app.save_task(), refresh_active_diff_now_task(app)])
         }
         Message::ActiveBranchResolved {
             terminal_id,
@@ -1287,6 +1311,32 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::BrowserForward => browser::handle_browser_forward(app),
         Message::BrowserReload => browser::handle_browser_reload(app),
         Message::BrowserDevTools => browser::handle_browser_devtools(app),
+        Message::ToggleDiffView => toggle_diff_view(app),
+        Message::DiffDataLoaded {
+            terminal_id,
+            worktree_path,
+            result,
+        } => {
+            app.finish_diff_refresh(&terminal_id);
+
+            let Some(runtime) = app.runtimes.get_mut(&terminal_id) else {
+                return Task::none();
+            };
+
+            match result {
+                Ok(snapshot) => {
+                    let html = git_diff::render_snapshot_html(&snapshot);
+                    let _ = runtime.update_diff_html(&worktree_path, &html);
+                }
+                Err(error) => {
+                    app.status = format!("Failed to load diff: {error}");
+                    let html = git_diff::render_error_html(&worktree_path, &error);
+                    let _ = runtime.update_diff_html(&worktree_path, &html);
+                }
+            }
+
+            Task::none()
+        }
     }
 }
 
@@ -1456,6 +1506,110 @@ fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) 
         CommandPaletteAction::NextTerminal => update(app, Message::SwitchTerminalByOffset(1)),
         CommandPaletteAction::PreviousTerminal => update(app, Message::SwitchTerminalByOffset(-1)),
     }
+}
+
+fn toggle_diff_view(app: &mut App) -> Task<Message> {
+    if app.active_browser().is_some() {
+        app.status = String::from("Close the browser panel before opening a diff split");
+        return Task::none();
+    }
+
+    let Some(context) = app.active_terminal_context() else {
+        app.status = String::from("No active terminal to diff");
+        return Task::none();
+    };
+
+    let Some(worktree_path) = context.worktree_path.clone() else {
+        app.status = String::from("The active terminal is not attached to a git worktree");
+        return Task::none();
+    };
+
+    if let Err(error) = app.ensure_runtime_for_terminal(&context.terminal_id) {
+        app.status = error;
+        return Task::none();
+    }
+
+    let diff_pane = match app.create_diff_pane_runtime(&worktree_path) {
+        Ok(pane) => pane,
+        Err(error) => {
+            app.status = error;
+            return Task::none();
+        }
+    };
+
+    let Some(outcome) = app
+        .runtimes
+        .get_mut(&context.terminal_id)
+        .and_then(|runtime| runtime.toggle_diff_right(diff_pane))
+    else {
+        app.status = String::from("Failed to toggle the diff split");
+        return Task::none();
+    };
+
+    app.sync_runtime_views();
+
+    match outcome {
+        DiffPaneToggle::Opened => {
+            app.status = format!("Opened diff for {}", context.worktree_name);
+            refresh_terminal_diff_now_task(app, &context.terminal_id)
+        }
+        DiffPaneToggle::Closed => {
+            app.clear_diff_refresh_state(&context.terminal_id);
+            app.status = String::from("Closed diff split");
+            Task::none()
+        }
+    }
+}
+
+fn refresh_active_diff_now_task(app: &mut App) -> Task<Message> {
+    let Some(terminal_id) = app.active_terminal_id() else {
+        return Task::none();
+    };
+    refresh_terminal_diff_now_task(app, &terminal_id)
+}
+
+fn refresh_terminal_diff_now_task(app: &mut App, terminal_id: &str) -> Task<Message> {
+    let Some(worktree_path) = app.begin_diff_refresh(terminal_id) else {
+        return Task::none();
+    };
+
+    load_diff_task(terminal_id.to_string(), worktree_path)
+}
+
+fn flush_due_diff_refresh_tasks(app: &mut App, now: Instant) -> Task<Message> {
+    let due_ids: Vec<String> = app
+        .diff_refresh_deadlines
+        .iter()
+        .filter_map(|(terminal_id, deadline)| (*deadline <= now).then_some(terminal_id.clone()))
+        .collect();
+
+    let mut tasks = Vec::new();
+    for terminal_id in due_ids {
+        let Some(worktree_path) = app.begin_diff_refresh(&terminal_id) else {
+            continue;
+        };
+        tasks.push(load_diff_task(terminal_id, worktree_path));
+    }
+
+    if tasks.is_empty() {
+        Task::none()
+    } else {
+        Task::batch(tasks)
+    }
+}
+
+fn load_diff_task(terminal_id: String, worktree_path: String) -> Task<Message> {
+    Task::perform(
+        {
+            let worktree_path = worktree_path.clone();
+            async move { git_diff::load_snapshot(&worktree_path) }
+        },
+        move |result| Message::DiffDataLoaded {
+            terminal_id,
+            worktree_path,
+            result,
+        },
+    )
 }
 
 fn open_active_worktree_in_editor(
