@@ -109,9 +109,12 @@ pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
     let file_tree = render_file_tree(snapshot);
     let sections = render_snapshot_files(snapshot);
     let body = format!(
-        "<div class=\"diff-shell\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"view-toolbar\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"close-diff\" title=\"Close diff\" aria-label=\"Close diff\">{}</button></div><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div>",
+        "<div class=\"diff-shell\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"view-toolbar\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-file\" title=\"Previous file\" aria-label=\"Previous file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-file\" title=\"Next file\" aria-label=\"Next file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-collapse\" title=\"Collapse files\" aria-label=\"Collapse files\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"close-diff\" title=\"Close diff\" aria-label=\"Close diff\">{}</button></div><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div>",
         file_tree,
         tree_icon(),
+        chevron_up_icon(),
+        chevron_down_icon(),
+        collapse_icon(),
         fullscreen_icon(),
         close_icon(),
         escape_html(&title),
@@ -1104,6 +1107,13 @@ body.tree-open .diff-shell {
 .toolbar-btn:hover {
   background: rgba(36, 38, 42, 0.98);
 }
+.toolbar-btn:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+.toolbar-btn:disabled:hover {
+  background: rgba(26, 27, 30, 0.9);
+}
 .toolbar-btn.is-active {
   border-color: rgba(104, 156, 255, 0.28);
   background: rgba(33, 38, 48, 0.98);
@@ -1861,6 +1871,9 @@ fn document_js() -> &'static str {
 
   const body = document.body;
   const treeButton = document.querySelector('[data-action="toggle-tree"]');
+  const prevFileButton = document.querySelector('[data-action="prev-file"]');
+  const nextFileButton = document.querySelector('[data-action="next-file"]');
+  const collapseButton = document.querySelector('[data-action="toggle-collapse"]');
   const fullscreenButton = document.querySelector('[data-action="toggle-fullscreen"]');
   const closeButton = document.querySelector('[data-action="close-diff"]');
   const filterInput = document.querySelector('[data-role="file-filter"]');
@@ -1895,8 +1908,16 @@ fn document_js() -> &'static str {
       candidate.classList.toggle('is-active', candidate.dataset.fileId === fileId);
     });
     treeFiles.forEach((item) => {
-      item.classList.toggle('is-active', item.dataset.fileTarget === fileId);
+      const isActive = item.dataset.fileTarget === fileId;
+      item.classList.toggle('is-active', isActive);
+      if (isActive) {
+        item.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
     });
+  }
+
+  function visibleNavigableCards() {
+    return visibleCards().filter((card) => !card.classList.contains('filter-hidden'));
   }
 
   function firstPreferredCard() {
@@ -1920,6 +1941,8 @@ fn document_js() -> &'static str {
     if (options.scroll) {
       card.scrollIntoView({ block: 'start', behavior: 'auto' });
     }
+
+    syncToolbar();
   }
 
   let scrollSelectionFrame = 0;
@@ -1954,11 +1977,36 @@ fn document_js() -> &'static str {
   function syncToolbar() {
     const treeOpen = body.classList.contains('tree-open');
     const splitZoomed = fullscreenButton?.classList.contains('is-active') || false;
+    const navigableCards = visibleNavigableCards();
+    const active = activeCard();
+    const activeIndex = active ? navigableCards.indexOf(active) : -1;
+    const allExpanded = visibleNavigableCards().length > 0
+      && visibleNavigableCards().every((card) => card.open);
 
     if (treeButton) {
       treeButton.classList.toggle('is-active', treeOpen);
       treeButton.title = treeOpen ? 'Hide file tree' : 'Show file tree';
       treeButton.setAttribute('aria-label', treeButton.title);
+    }
+
+    if (prevFileButton) {
+      prevFileButton.disabled = navigableCards.length <= 1 || activeIndex <= 0;
+      prevFileButton.title = 'Previous file';
+      prevFileButton.setAttribute('aria-label', 'Previous file');
+    }
+
+    if (nextFileButton) {
+      nextFileButton.disabled = navigableCards.length <= 1
+        || activeIndex === -1
+        || activeIndex >= navigableCards.length - 1;
+      nextFileButton.title = 'Next file';
+      nextFileButton.setAttribute('aria-label', 'Next file');
+    }
+
+    if (collapseButton) {
+      collapseButton.classList.toggle('is-active', allExpanded);
+      collapseButton.title = allExpanded ? 'Collapse files' : 'Expand files';
+      collapseButton.setAttribute('aria-label', collapseButton.title);
     }
 
     if (fullscreenButton) {
@@ -1993,6 +2041,30 @@ fn document_js() -> &'static str {
 
   function closeDiff() {
     postNativeAction('toggle-diff-view');
+  }
+
+  function moveFile(offset) {
+    const cards = visibleNavigableCards();
+    if (!cards.length) return;
+
+    const current = activeCard();
+    const currentIndex = current ? cards.indexOf(current) : -1;
+    const fallbackIndex = currentIndex === -1 ? 0 : currentIndex;
+    const nextIndex = Math.min(cards.length - 1, Math.max(0, fallbackIndex + offset));
+    const nextCard = cards[nextIndex];
+    if (!nextCard) return;
+    setActiveFile(nextCard.dataset.fileId || '', { scroll: true });
+    syncToolbar();
+  }
+
+  function toggleAllFiles() {
+    const cards = visibleNavigableCards();
+    if (!cards.length) return;
+    const shouldExpand = cards.some((card) => !card.open);
+    cards.forEach((card) => {
+      card.open = shouldExpand;
+    });
+    syncToolbar();
   }
 
   function applyFilter() {
@@ -2030,6 +2102,8 @@ fn document_js() -> &'static str {
         setActiveFile(preferred.dataset.fileId, { scroll: false });
       }
     }
+
+    syncToolbar();
   }
 
   function captureDiffState() {
@@ -2087,6 +2161,9 @@ fn document_js() -> &'static str {
   window.__NOT_TERMINAL_DIFF_CAPTURE_STATE__ = captureDiffState;
 
   treeButton?.addEventListener('click', toggleTree);
+  prevFileButton?.addEventListener('click', () => moveFile(-1));
+  nextFileButton?.addEventListener('click', () => moveFile(1));
+  collapseButton?.addEventListener('click', toggleAllFiles);
   fullscreenButton?.addEventListener('click', toggleFullscreen);
   closeButton?.addEventListener('click', closeDiff);
   filterInput?.addEventListener('input', applyFilter);
@@ -2200,6 +2277,7 @@ fn document_js() -> &'static str {
       const nextOpen = !card.open;
       setActiveFile(card.dataset.fileId || '', { scroll: false });
       card.open = nextOpen;
+      syncToolbar();
     });
   });
 
@@ -2226,6 +2304,18 @@ fn document_js() -> &'static str {
 
 fn tree_icon() -> &'static str {
     r#"<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="4.5" width="15" height="15" rx="2.5"></rect><path d="M12 8v8"></path><path d="M8 12h8"></path></svg>"#
+}
+
+fn chevron_up_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14.5L12 8.5l6 6"></path></svg>"#
+}
+
+fn chevron_down_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6"></path></svg>"#
+}
+
+fn collapse_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8.5h12"></path><path d="M8.5 12h7"></path><path d="M10.5 15.5h3"></path></svg>"#
 }
 
 fn fullscreen_icon() -> &'static str {

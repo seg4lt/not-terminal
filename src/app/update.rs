@@ -10,7 +10,7 @@ use crate::ghostty_embed::{
     disable_system_hide_shortcuts, host_view_focus_search, register_focus_toggle_hotkey,
     take_pending_attention_badge_click,
 };
-use iced::{Task, widget::operation, window};
+use iced::{Task, keyboard, widget::operation, window};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Instant;
@@ -80,6 +80,33 @@ pub(super) fn terminal_search_focus_task(app: &mut App) -> Task<Message> {
     {
         host_view_focus_search(host_view);
     }
+    Task::none()
+}
+
+pub(super) fn modal_focus_task(app: &App) -> Task<Message> {
+    if app.command_palette_open {
+        return Task::batch([
+            operation::focus("command-palette-input"),
+            operation::move_cursor_to_end("command-palette-input"),
+            operation::snap_to(COMMAND_PALETTE_SCROLL_ID, operation::RelativeOffset::START),
+        ]);
+    }
+
+    if app.quick_open_open {
+        return Task::batch([
+            operation::focus("quick-open-input"),
+            operation::move_cursor_to_end("quick-open-input"),
+            operation::snap_to(QUICK_OPEN_SCROLL_ID, operation::RelativeOffset::START),
+        ]);
+    }
+
+    if app.rename_dialog.is_some() {
+        return Task::batch([
+            operation::focus("rename-input"),
+            operation::move_cursor_to_end("rename-input"),
+        ]);
+    }
+
     Task::none()
 }
 
@@ -201,6 +228,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
 
             Task::batch([
+                modal_focus_task(app),
                 terminal_search_focus_task(app),
                 flush_due_diff_refresh_tasks(app, now),
             ])
@@ -495,6 +523,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 let _ = app.close_terminal_search(true);
             }
             app.command_palette_open = open;
+            app.keyboard_modifiers = keyboard::Modifiers::default();
             if open {
                 app.command_palette_query.clear();
                 app.command_palette_selected_index = 0;

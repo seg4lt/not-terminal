@@ -14,6 +14,60 @@ typedef struct rust_webview_s {
     id mouse_monitor;
 } rust_webview_t;
 
+static bool rust_webview_is_owned_responder(rust_webview_t *wrapper, NSResponder *responder) {
+    if (wrapper == NULL || wrapper->webview == nil || responder == nil) {
+        return false;
+    }
+
+    for (NSResponder *current = responder; current != nil; current = [current nextResponder]) {
+        if (current == (NSResponder *)wrapper->webview) {
+            return true;
+        }
+
+        if ([current isKindOfClass:[NSView class]]) {
+            NSView *view = (NSView *)current;
+            if (view == wrapper->webview || [view isDescendantOf:wrapper->webview]) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
+    if (wrapper == NULL || wrapper->webview == nil) {
+        return;
+    }
+
+    NSWindow *window = [wrapper->webview window];
+    if (window == nil) {
+        return;
+    }
+
+    NSResponder *firstResponder = [window firstResponder];
+    if (!rust_webview_is_owned_responder(wrapper, firstResponder)) {
+        return;
+    }
+
+    NSView *fallback = nil;
+    if (wrapper->container != nil) {
+        fallback = [wrapper->container superview];
+    }
+    if (fallback != nil && [fallback acceptsFirstResponder] &&
+        [window makeFirstResponder:fallback]) {
+        return;
+    }
+
+    NSView *contentView = [window contentView];
+    if (contentView != nil && [contentView acceptsFirstResponder] &&
+        [window makeFirstResponder:contentView]) {
+        return;
+    }
+
+    [window makeFirstResponder:nil];
+}
+
 // Custom view class that refuses first responder to prevent keyboard capture
 @interface NonFirstResponderNSView : NSView
 @end
@@ -226,13 +280,7 @@ void *webview_new(void *parent_ns_view) {
                                                   // (e.g. WKContentView) hold first-responder status.
                                                   // Reclaim focus so the event reaches the terminal instead.
                                                   if (![(KeyboardCapableWKWebView *)wrapper->webview keyboardEnabled]) {
-                                                      NSResponder *fr = [window firstResponder];
-                                                      if (fr != nil && [fr isKindOfClass:[NSView class]]) {
-                                                          NSView *frView = (NSView *)fr;
-                                                          if (frView == wrapper->webview || [frView isDescendantOf:wrapper->webview]) {
-                                                              [window makeFirstResponder:nil];
-                                                          }
-                                                      }
+                                                      rust_webview_restore_safe_responder(wrapper);
                                                       return event;
                                                   }
 
@@ -310,6 +358,8 @@ void webview_free(void *webview_ptr) {
     }
 
     rust_webview_t *wrapper = (rust_webview_t *)webview_ptr;
+
+    rust_webview_restore_safe_responder(wrapper);
 
     if (wrapper->webview != nil) {
         WKUserContentController *userContentController = wrapper->webview.configuration.userContentController;
@@ -665,10 +715,7 @@ void webview_set_keyboard_enabled(void *webview_ptr, bool enabled) {
 
     // If disabling, resign first responder immediately so the terminal can reclaim it.
     if (!enabled) {
-        NSWindow *window = [wrapper->webview window];
-        if (window != nil && [window firstResponder] == wrapper->webview) {
-            [window makeFirstResponder:nil];
-        }
+        rust_webview_restore_safe_responder(wrapper);
     }
 }
 
@@ -684,8 +731,5 @@ void webview_lose_focus(void *webview_ptr) {
     }
 
     // Make the window the key window to take focus away from webview
-    NSWindow *window = [wrapper->webview window];
-    if (window != nil) {
-        [window makeFirstResponder:nil];
-    }
+    rust_webview_restore_safe_responder(wrapper);
 }
