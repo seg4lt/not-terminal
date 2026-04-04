@@ -109,11 +109,13 @@ pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
     let file_tree = render_file_tree(snapshot);
     let sections = render_snapshot_files(snapshot);
     let body = format!(
-        "<div class=\"diff-shell\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"view-toolbar\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-file\" title=\"Previous file\" aria-label=\"Previous file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-file\" title=\"Next file\" aria-label=\"Next file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-collapse\" title=\"Collapse files\" aria-label=\"Collapse files\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"close-diff\" title=\"Close diff\" aria-label=\"Close diff\">{}</button></div><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div>",
+        "<div class=\"diff-shell\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"view-toolbar\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-file\" title=\"Previous file\" aria-label=\"Previous file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-file\" title=\"Next file\" aria-label=\"Next file\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"prev-hunk\" title=\"Previous change\" aria-label=\"Previous change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"next-hunk\" title=\"Next change\" aria-label=\"Next change\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-collapse\" title=\"Collapse files\" aria-label=\"Collapse files\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"close-diff\" title=\"Close diff\" aria-label=\"Close diff\">{}</button></div><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div>",
         file_tree,
         tree_icon(),
         chevron_up_icon(),
         chevron_down_icon(),
+        jump_up_icon(),
+        jump_down_icon(),
         collapse_icon(),
         fullscreen_icon(),
         close_icon(),
@@ -765,6 +767,10 @@ fn excerpt_dom_id(file_id: &str, key: &str) -> String {
     format!("excerpt-{}-{}", file_id, slugify(key))
 }
 
+fn hunk_dom_id(file_id: &str, index: usize) -> String {
+    format!("hunk-{}-{}", file_id, index)
+}
+
 fn tree_dom_id(path: &str) -> String {
     format!("tree-{}", slugify(path))
 }
@@ -842,19 +848,42 @@ fn render_tree_directory(
     depth: usize,
     path_prefix: &str,
 ) -> String {
-    let path = if path_prefix.is_empty() {
-        name.to_string()
-    } else {
-        format!("{path_prefix}/{name}")
-    };
+    let (label, path, directory) = flatten_tree_directory(name, directory, path_prefix);
     format!(
         "<details class=\"tree-group tree-dir\" data-tree-id=\"{}\" open><summary class=\"tree-row tree-row-dir\" style=\"--depth:{}\"><span class=\"tree-caret\"></span><span class=\"tree-icon tree-icon-folder\">{}</span><span class=\"tree-label\">{}</span></summary><div class=\"tree-children\">{}</div></details>",
         escape_html(&tree_dom_id(&path)),
         depth,
         folder_icon(),
-        escape_html(name),
+        escape_html(&label),
         render_tree_directory_contents(directory, depth + 1, &path)
     )
+}
+
+fn flatten_tree_directory<'a>(
+    name: &str,
+    directory: &'a TreeDirectory,
+    path_prefix: &str,
+) -> (String, String, &'a TreeDirectory) {
+    let mut label = name.to_string();
+    let mut path = if path_prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{path_prefix}/{name}")
+    };
+    let mut current = directory;
+
+    while current.files.is_empty() && current.directories.len() == 1 {
+        let Some((child_name, child_directory)) = current.directories.iter().next() else {
+            break;
+        };
+        label.push('/');
+        label.push_str(child_name);
+        path.push('/');
+        path.push_str(child_name);
+        current = child_directory;
+    }
+
+    (label, path, current)
 }
 
 fn render_tree_file(file: &TreeFileEntry, depth: usize) -> String {
@@ -890,8 +919,10 @@ fn file_name(path: &str) -> String {
 fn render_hunk(file_id: &str, hunk: &MergedDiffHunk, hunk_index: usize) -> String {
     let rows = render_hunk_rows(file_id, hunk_index, &hunk.lines);
     format!(
-        "<div class=\"hunk\"><div class=\"diff-grid\">{}</div></div>",
-        rows
+        "<div class=\"hunk\" data-hunk-id=\"{}\" data-file-id=\"{}\"><div class=\"diff-grid\">{}</div></div>",
+        escape_html(&hunk_dom_id(file_id, hunk_index)),
+        escape_html(file_id),
+        rows,
     )
 }
 
@@ -1446,6 +1477,7 @@ body.tree-open .file-tree-panel {
   border-radius: 0;
   overflow: visible;
   background: transparent;
+  scroll-margin-top: 84px;
 }
 .hunk:first-child {
   margin-top: 0;
@@ -1876,6 +1908,8 @@ fn document_js() -> &'static str {
   const treeButton = document.querySelector('[data-action="toggle-tree"]');
   const prevFileButton = document.querySelector('[data-action="prev-file"]');
   const nextFileButton = document.querySelector('[data-action="next-file"]');
+  const prevHunkButton = document.querySelector('[data-action="prev-hunk"]');
+  const nextHunkButton = document.querySelector('[data-action="next-hunk"]');
   const collapseButton = document.querySelector('[data-action="toggle-collapse"]');
   const fullscreenButton = document.querySelector('[data-action="toggle-fullscreen"]');
   const closeButton = document.querySelector('[data-action="close-diff"]');
@@ -1921,6 +1955,13 @@ fn document_js() -> &'static str {
 
   function visibleNavigableCards() {
     return visibleCards().filter((card) => !card.classList.contains('filter-hidden'));
+  }
+
+  function visibleNavigableHunks() {
+    return Array.from(document.querySelectorAll('.hunk')).filter((hunk) => {
+      const card = hunk.closest('.file-card');
+      return !!card && !card.classList.contains('filter-hidden') && card.open;
+    });
   }
 
   function firstPreferredCard() {
@@ -1981,8 +2022,10 @@ fn document_js() -> &'static str {
     const treeOpen = body.classList.contains('tree-open');
     const splitZoomed = fullscreenButton?.classList.contains('is-active') || false;
     const navigableCards = visibleNavigableCards();
+    const navigableHunks = visibleNavigableHunks();
     const active = activeCard();
     const activeIndex = active ? navigableCards.indexOf(active) : -1;
+    const hunkIndex = currentHunkIndex(navigableHunks);
     const allExpanded = visibleNavigableCards().length > 0
       && visibleNavigableCards().every((card) => card.open);
 
@@ -2004,6 +2047,20 @@ fn document_js() -> &'static str {
         || activeIndex >= navigableCards.length - 1;
       nextFileButton.title = 'Next file';
       nextFileButton.setAttribute('aria-label', 'Next file');
+    }
+
+    if (prevHunkButton) {
+      prevHunkButton.disabled = navigableHunks.length <= 1 || hunkIndex <= 0;
+      prevHunkButton.title = 'Previous change';
+      prevHunkButton.setAttribute('aria-label', 'Previous change');
+    }
+
+    if (nextHunkButton) {
+      nextHunkButton.disabled = navigableHunks.length <= 1
+        || hunkIndex === -1
+        || hunkIndex >= navigableHunks.length - 1;
+      nextHunkButton.title = 'Next change';
+      nextHunkButton.setAttribute('aria-label', 'Next change');
     }
 
     if (collapseButton) {
@@ -2046,6 +2103,22 @@ fn document_js() -> &'static str {
     postNativeAction('toggle-diff-view');
   }
 
+  function currentHunkIndex(hunks = visibleNavigableHunks()) {
+    if (!hunks.length) return -1;
+
+    let bestIndex = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    hunks.forEach((hunk, index) => {
+      const rect = hunk.getBoundingClientRect();
+      const distance = Math.abs(rect.top - 96);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    });
+    return bestIndex;
+  }
+
   function moveFile(offset) {
     const cards = visibleNavigableCards();
     if (!cards.length) return;
@@ -2057,6 +2130,25 @@ fn document_js() -> &'static str {
     const nextCard = cards[nextIndex];
     if (!nextCard) return;
     setActiveFile(nextCard.dataset.fileId || '', { scroll: true });
+    syncToolbar();
+  }
+
+  function moveHunk(offset) {
+    const hunks = visibleNavigableHunks();
+    if (!hunks.length) return;
+
+    const currentIndex = currentHunkIndex(hunks);
+    const fallbackIndex = currentIndex === -1 ? 0 : currentIndex;
+    const nextIndex = Math.min(hunks.length - 1, Math.max(0, fallbackIndex + offset));
+    const nextHunk = hunks[nextIndex];
+    if (!nextHunk) return;
+
+    const fileId = nextHunk.dataset.fileId || "";
+    if (fileId) {
+      setActiveFile(fileId, { scroll: false, open: true });
+    }
+
+    nextHunk.scrollIntoView({ block: 'start', behavior: 'auto' });
     syncToolbar();
   }
 
@@ -2166,6 +2258,8 @@ fn document_js() -> &'static str {
   treeButton?.addEventListener('click', toggleTree);
   prevFileButton?.addEventListener('click', () => moveFile(-1));
   nextFileButton?.addEventListener('click', () => moveFile(1));
+  prevHunkButton?.addEventListener('click', () => moveHunk(-1));
+  nextHunkButton?.addEventListener('click', () => moveHunk(1));
   collapseButton?.addEventListener('click', toggleAllFiles);
   fullscreenButton?.addEventListener('click', toggleFullscreen);
   closeButton?.addEventListener('click', closeDiff);
@@ -2315,6 +2409,14 @@ fn chevron_up_icon() -> &'static str {
 
 fn chevron_down_icon() -> &'static str {
     r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6"></path></svg>"#
+}
+
+fn jump_up_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V7"></path><path d="M7.5 11.5L12 7l4.5 4.5"></path><path d="M6 20h12"></path></svg>"#
+}
+
+fn jump_down_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v11"></path><path d="M7.5 12.5L12 17l4.5-4.5"></path><path d="M6 4h12"></path></svg>"#
 }
 
 fn collapse_icon() -> &'static str {
