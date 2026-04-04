@@ -1195,7 +1195,7 @@ function injectStyle() {
     }
     .search-toolbar {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(260px, 520px) auto;
+      grid-template-columns: minmax(0, 1fr) minmax(120px, 520px) auto;
       gap: 12px;
       align-items: center;
       padding: 10px 14px;
@@ -1205,14 +1205,17 @@ function injectStyle() {
     }
     .toolbar-summary {
       min-width: 0;
-      display: grid;
-      gap: 2px;
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      overflow: hidden;
     }
     .toolbar-counts {
       display: flex;
       align-items: baseline;
       gap: 10px;
       white-space: nowrap;
+      flex-shrink: 0;
     }
     .toolbar-counts strong {
       font-size: 13px;
