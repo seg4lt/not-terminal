@@ -7,7 +7,9 @@ use crate::app::model::{
     next_project_name, next_terminal_name,
 };
 use crate::app::persistence;
-use crate::app::runtime::{PaneRuntime, RuntimeSession, SplitAxis, SplitDivider};
+use crate::app::runtime::{
+    PaneRuntime, RuntimeDiffAction, RuntimeSession, SplitAxis, SplitDivider,
+};
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyProgressReportState, GhosttyRuntimeAction, host_view_free, host_view_new,
     ns_view_ptr, parent_view_set_attention_badge,
@@ -2315,6 +2317,31 @@ impl App {
                     } => self.sync_terminal_search_selected(&terminal_id, surface_ptr, selected),
                 };
 
+                changed = changed || action_changed;
+            }
+        }
+
+        changed
+    }
+
+    pub(crate) fn process_diff_pane_actions(&mut self) -> bool {
+        let mut changed = false;
+        let terminal_ids: Vec<String> = self.runtimes.keys().cloned().collect();
+
+        for terminal_id in terminal_ids {
+            let actions = if let Some(runtime) = self.runtimes.get_mut(&terminal_id) {
+                runtime.drain_diff_actions()
+            } else {
+                continue;
+            };
+
+            for RuntimeDiffAction { pane_id, action } in actions {
+                let action_changed = match action {
+                    crate::app::diff_runtime::DiffPaneAction::ToggleSplitZoom => self
+                        .runtimes
+                        .get_mut(&terminal_id)
+                        .is_some_and(|runtime| runtime.toggle_split_zoom_for_pane(&pane_id)),
+                };
                 changed = changed || action_changed;
             }
         }

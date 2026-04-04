@@ -21,6 +21,7 @@ unsafe extern "C" {
     #[allow(dead_code)]
     fn webview_get_title(webview_ptr: *mut ()) -> *mut i8;
     fn webview_open_dev_tools(webview_ptr: *mut ());
+    fn webview_take_action(webview_ptr: *mut ()) -> *mut i8;
     #[allow(dead_code)]
     fn webview_lose_focus(webview_ptr: *mut ());
     #[allow(dead_code)]
@@ -157,6 +158,20 @@ impl WebView {
     pub fn open_dev_tools(&self) {
         unsafe {
             webview_open_dev_tools(self.ptr.as_ptr());
+        }
+    }
+
+    /// Take the next pending action posted from the hosted page, if any.
+    pub fn take_action(&self) -> Option<String> {
+        unsafe {
+            let ptr = webview_take_action(self.ptr.as_ptr());
+            if ptr.is_null() {
+                return None;
+            }
+            let cstr = CStr::from_ptr(ptr);
+            let result = cstr.to_string_lossy().to_string();
+            free(ptr as *mut std::ffi::c_void);
+            Some(result)
         }
     }
 

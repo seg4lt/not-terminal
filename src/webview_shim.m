@@ -9,6 +9,7 @@
 typedef struct rust_webview_s {
     WKWebView *webview;
     NSView *container;
+    char *pending_action;
 } rust_webview_t;
 
 // Custom view class that refuses first responder to prevent keyboard capture
@@ -20,15 +21,53 @@ typedef struct rust_webview_s {
 }
 @end
 
-@interface NonFirstResponderWKWebView : WKWebView
+@interface KeyboardCapableWKWebView : WKWebView
 @end
-@implementation NonFirstResponderWKWebView
+@implementation KeyboardCapableWKWebView
 - (BOOL)acceptsFirstResponder {
-    return NO;
+    return YES;
 }
 - (BOOL)becomeFirstResponder {
-    return NO;
+    return [super becomeFirstResponder];
 }
+@end
+
+@interface RustWebViewScriptHandler : NSObject<WKScriptMessageHandler>
+- (instancetype)initWithWrapper:(rust_webview_t *)wrapper;
+@end
+
+@implementation RustWebViewScriptHandler {
+    rust_webview_t *_wrapper;
+}
+
+- (instancetype)initWithWrapper:(rust_webview_t *)wrapper {
+    self = [super init];
+    if (self != nil) {
+        _wrapper = wrapper;
+    }
+    return self;
+}
+
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (_wrapper == NULL || message.body == nil || ![message.body isKindOfClass:[NSString class]]) {
+        return;
+    }
+
+    NSString *action = (NSString *)message.body;
+    const char *utf8 = [action UTF8String];
+    if (utf8 == NULL) {
+        return;
+    }
+
+    if (_wrapper->pending_action != NULL) {
+        free(_wrapper->pending_action);
+        _wrapper->pending_action = NULL;
+    }
+
+    _wrapper->pending_action = strdup(utf8);
+}
+
 @end
 
 // Create a new webview hosted in a container view
@@ -46,6 +85,12 @@ void *webview_new(void *parent_ns_view) {
         return NULL;
     }
 
+    rust_webview_t *wrapper = (rust_webview_t *)calloc(1, sizeof(rust_webview_t));
+    if (wrapper == NULL) {
+        [container release];
+        return NULL;
+    }
+
     [container setHidden:YES];
     [container setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     [parent addSubview:container];
@@ -53,14 +98,31 @@ void *webview_new(void *parent_ns_view) {
     // Create WKWebView configuration
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     if (config == nil) {
+        free(wrapper);
         [container release];
         return NULL;
     }
 
+    WKUserContentController *userContentController = [[WKUserContentController alloc] init];
+    if (userContentController == nil) {
+        [config release];
+        free(wrapper);
+        [container release];
+        return NULL;
+    }
+
+    RustWebViewScriptHandler *scriptHandler =
+        [[RustWebViewScriptHandler alloc] initWithWrapper:wrapper];
+    [userContentController addScriptMessageHandler:scriptHandler name:@"notTerminalDiff"];
+    [scriptHandler release];
+    [config setUserContentController:userContentController];
+    [userContentController release];
+
     // Create the WKWebView
-    WKWebView *webview = [[NonFirstResponderWKWebView alloc] initWithFrame:frame configuration:config];
+    WKWebView *webview = [[KeyboardCapableWKWebView alloc] initWithFrame:frame configuration:config];
     if (webview == nil) {
         [config release];
+        free(wrapper);
         [container release];
         return NULL;
     }
@@ -69,16 +131,9 @@ void *webview_new(void *parent_ns_view) {
     [webview setNavigationDelegate:nil];
     [container addSubview:webview];
 
-    // Allocate and return the wrapper
-    rust_webview_t *wrapper = (rust_webview_t *)malloc(sizeof(rust_webview_t));
-    if (wrapper == NULL) {
-        [webview release];
-        [container release];
-        return NULL;
-    }
-
     wrapper->webview = webview;
     wrapper->container = container;
+    wrapper->pending_action = NULL;
 
     return (void *)wrapper;
 }
@@ -92,6 +147,8 @@ void webview_free(void *webview_ptr) {
     rust_webview_t *wrapper = (rust_webview_t *)webview_ptr;
 
     if (wrapper->webview != nil) {
+        WKUserContentController *userContentController = wrapper->webview.configuration.userContentController;
+        [userContentController removeScriptMessageHandlerForName:@"notTerminalDiff"];
         [wrapper->webview removeFromSuperview];
         [wrapper->webview release];
         wrapper->webview = nil;
@@ -101,6 +158,11 @@ void webview_free(void *webview_ptr) {
         [wrapper->container removeFromSuperview];
         [wrapper->container release];
         wrapper->container = nil;
+    }
+
+    if (wrapper->pending_action != NULL) {
+        free(wrapper->pending_action);
+        wrapper->pending_action = NULL;
     }
 
     free(wrapper);
@@ -339,6 +401,21 @@ void webview_open_dev_tools(void *webview_ptr) {
     } @catch (NSException *exception) {
         // Ignore errors - devtools may not be available
     }
+}
+
+char *webview_take_action(void *webview_ptr) {
+    if (webview_ptr == NULL) {
+        return NULL;
+    }
+
+    rust_webview_t *wrapper = (rust_webview_t *)webview_ptr;
+    if (wrapper->pending_action == NULL) {
+        return NULL;
+    }
+
+    char *result = wrapper->pending_action;
+    wrapper->pending_action = NULL;
+    return result;
 }
 
 // Make the webview lose focus (so keyboard input doesn't go to it)

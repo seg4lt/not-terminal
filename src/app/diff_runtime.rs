@@ -1,6 +1,11 @@
 use crate::app::git_diff;
 use crate::webview::WebView;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiffPaneAction {
+    ToggleSplitZoom,
+}
+
 pub(crate) struct DiffPaneRuntime {
     pub(crate) id: String,
     pub(crate) webview: WebView,
@@ -20,6 +25,14 @@ impl DiffPaneRuntime {
             worktree_path,
             last_frame: None,
             last_hidden: None,
+        }
+    }
+
+    pub(crate) fn take_action(&self) -> Option<DiffPaneAction> {
+        let action = self.webview.take_action()?;
+        match action.as_str() {
+            "toggle-split-zoom" => Some(DiffPaneAction::ToggleSplitZoom),
+            _ => None,
         }
     }
 }

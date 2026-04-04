@@ -186,7 +186,8 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             }
 
             let search_applied = app.apply_terminal_search_if_due(now);
-            if app.process_runtime_actions() || layout_changed {
+            let diff_action_changed = app.process_diff_pane_actions();
+            if app.process_runtime_actions() || diff_action_changed || layout_changed {
                 app.sync_runtime_views();
             }
 

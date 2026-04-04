@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -89,6 +90,7 @@ pub(crate) fn render_error_html(worktree_path: &str, error: &str) -> String {
 
 pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
     let title = repo_title(&snapshot.worktree_path);
+    let file_tree = render_file_tree(snapshot);
     let sections = snapshot
         .sections
         .iter()
@@ -96,10 +98,13 @@ pub(crate) fn render_snapshot_html(snapshot: &DiffSnapshot) -> String {
         .collect::<Vec<_>>()
         .join("");
     let body = format!(
-        "<div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}",
+        "<div class=\"diff-shell\"><aside class=\"file-tree-panel\">{}</aside><main class=\"diff-main\"><div class=\"view-toolbar\"><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-tree\" title=\"Show file tree\" aria-label=\"Show file tree\">{}</button><button class=\"toolbar-btn\" type=\"button\" data-action=\"toggle-fullscreen\" title=\"Enter fullscreen\" aria-label=\"Enter fullscreen\">{}</button></div><div class=\"hero\"><div class=\"hero-label\">Diff</div><h1>{}</h1><p>{}</p></div>{}</main></div>",
+        file_tree,
+        tree_icon(),
+        fullscreen_icon(),
         escape_html(&title),
         escape_html(&snapshot.worktree_path),
-        sections
+        sections,
     );
     render_document(&title, &body)
 }
@@ -283,7 +288,7 @@ fn render_section(section: &DiffSection) -> String {
         section
             .files
             .iter()
-            .map(render_file)
+            .map(|file| render_file(file, section.label, &file_dom_id(section.label, &file.path)))
             .collect::<Vec<_>>()
             .join("")
     };
@@ -296,7 +301,7 @@ fn render_section(section: &DiffSection) -> String {
     )
 }
 
-fn render_file(file: &DiffFile) -> String {
+fn render_file(file: &DiffFile, section_label: &str, file_id: &str) -> String {
     let language = infer_language(&file.path);
     let hunks = if file.hunks.is_empty() {
         "<div class=\"file-empty\">No textual changes to display.</div>".to_string()
@@ -307,15 +312,198 @@ fn render_file(file: &DiffFile) -> String {
             .collect::<Vec<_>>()
             .join("")
     };
+    let open_attr = if section_label == "Unstaged" {
+        " open"
+    } else {
+        ""
+    };
 
     format!(
-        "<details class=\"file-card\" data-language=\"{}\" open><summary><span class=\"file-path\">{}</span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\">{}</div></details>",
+        "<details id=\"{}\" class=\"file-card\" data-language=\"{}\" data-file-id=\"{}\" data-stage=\"{}\" data-search=\"{} {}\"{}><summary><span class=\"file-main\"><span class=\"file-path\">{}</span></span><span class=\"file-stats\"><span class=\"added\">+{}</span><span class=\"removed\">-{}</span></span></summary><div class=\"file-body\">{}</div></details>",
+        escape_html(file_id),
         language,
+        escape_html(file_id),
+        escape_html(section_label),
+        escape_html(&file.path),
+        escape_html(section_label),
+        open_attr,
         escape_html(&file.path),
         file.added,
         file.removed,
         hunks
     )
+}
+
+fn render_file_tree(snapshot: &DiffSnapshot) -> String {
+    let mut unstaged_root = TreeDirectory::default();
+    let mut staged_root = TreeDirectory::default();
+    let mut unstaged_count = 0usize;
+    let mut staged_count = 0usize;
+
+    for section in &snapshot.sections {
+        for file in &section.files {
+            if section.label == "Unstaged" {
+                insert_tree_file(&mut unstaged_root, file, section.label);
+                unstaged_count += 1;
+            } else {
+                insert_tree_file(&mut staged_root, file, section.label);
+                staged_count += 1;
+            }
+        }
+    }
+
+    let total_count = unstaged_count + staged_count;
+    let unstaged_html = render_tree_stage_section(
+        "Working Copy",
+        "Live edits",
+        "tree-stage-heading-unstaged",
+        &unstaged_root,
+        unstaged_count,
+    );
+    let staged_html = render_tree_stage_section(
+        "Index",
+        "Ready to commit",
+        "tree-stage-heading-staged",
+        &staged_root,
+        staged_count,
+    );
+
+    format!(
+        "<div class=\"file-tree-shell\"><div class=\"file-tree-header\"><div class=\"file-tree-count\">{} Changes</div></div><label class=\"file-tree-filter\"><input type=\"search\" data-role=\"file-filter\" placeholder=\"Filter files...\" spellcheck=\"false\"></label>{}{}</div>",
+        total_count, unstaged_html, staged_html,
+    )
+}
+
+fn file_dom_id(section_label: &str, path: &str) -> String {
+    format!("{}-{}", slugify(section_label), slugify(path))
+}
+
+fn slugify(value: &str) -> String {
+    let mut slug = String::with_capacity(value.len());
+    let mut last_dash = false;
+
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+
+    slug.trim_matches('-').to_string()
+}
+
+#[derive(Default)]
+struct TreeDirectory {
+    directories: BTreeMap<String, TreeDirectory>,
+    files: Vec<TreeFileEntry>,
+}
+
+struct TreeFileEntry {
+    label: String,
+    path: String,
+    file_id: String,
+    section_label: &'static str,
+}
+
+fn insert_tree_file(root: &mut TreeDirectory, file: &DiffFile, section_label: &'static str) {
+    let mut current = root;
+    if let Some(parent) = Path::new(&file.path).parent() {
+        for segment in parent
+            .iter()
+            .filter_map(|value| value.to_str())
+            .filter(|value| !value.is_empty() && *value != ".")
+        {
+            current = current.directories.entry(segment.to_string()).or_default();
+        }
+    }
+
+    current.files.push(TreeFileEntry {
+        label: file_name(&file.path),
+        path: file.path.clone(),
+        file_id: file_dom_id(section_label, &file.path),
+        section_label,
+    });
+}
+
+fn render_tree_directory_contents(directory: &TreeDirectory, depth: usize) -> String {
+    let mut rendered = directory
+        .directories
+        .iter()
+        .map(|(name, child)| render_tree_directory(name, child, depth))
+        .collect::<Vec<_>>();
+
+    let mut files = directory.files.iter().collect::<Vec<_>>();
+    files.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then(left.section_label.cmp(right.section_label))
+    });
+    rendered.extend(files.into_iter().map(|file| render_tree_file(file, depth)));
+    rendered.join("")
+}
+
+fn render_tree_directory(name: &str, directory: &TreeDirectory, depth: usize) -> String {
+    format!(
+        "<details class=\"tree-group tree-dir\" open><summary class=\"tree-row tree-row-dir\" style=\"--depth:{}\"><span class=\"tree-caret\"></span><span class=\"tree-icon tree-icon-folder\">{}</span><span class=\"tree-label\">{}</span></summary><div class=\"tree-children\">{}</div></details>",
+        depth,
+        folder_icon(),
+        escape_html(name),
+        render_tree_directory_contents(directory, depth + 1)
+    )
+}
+
+fn render_tree_file(file: &TreeFileEntry, depth: usize) -> String {
+    let stage_class = if file.section_label == "Unstaged" {
+        "tree-stage-unstaged"
+    } else {
+        "tree-stage-staged"
+    };
+
+    format!(
+        "<button class=\"tree-row tree-file\" type=\"button\" style=\"--depth:{}\" data-file-target=\"{}\" data-filter-text=\"{} {}\"><span class=\"tree-row-spacer\"></span><span class=\"tree-icon tree-icon-file\">{}</span><span class=\"tree-label\">{}</span><span class=\"tree-stage-dot {}\"></span></button>",
+        depth,
+        escape_html(&file.file_id),
+        escape_html(&file.path),
+        escape_html(file.section_label),
+        file_icon(),
+        escape_html(&file.label),
+        stage_class,
+    )
+}
+
+fn render_tree_stage_section(
+    title: &str,
+    subtitle: &str,
+    stage_class: &str,
+    root: &TreeDirectory,
+    count: usize,
+) -> String {
+    let body = if root.directories.is_empty() && root.files.is_empty() {
+        String::from("<div class=\"tree-empty\">Nothing here</div>")
+    } else {
+        render_tree_directory_contents(root, 0)
+    };
+
+    format!(
+        "<section class=\"file-tree-stage\"><div class=\"file-tree-stage-header\"><div class=\"file-tree-stage-copy\"><div class=\"file-tree-stage-title {}\">{}</div><div class=\"file-tree-stage-subtitle\">{}</div></div><div class=\"file-tree-stage-count\">{}</div></div><div class=\"file-tree-groups\">{}</div></section>",
+        stage_class,
+        escape_html(title),
+        escape_html(subtitle),
+        count,
+        body
+    )
+}
+
+fn file_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| path.to_string())
 }
 
 fn render_hunk(hunk: &DiffHunk) -> String {
@@ -451,6 +639,262 @@ body {
   min-height: 100vh;
   padding: 18px;
 }
+.diff-shell {
+  display: grid;
+  grid-template-columns: 0 minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+body.tree-open .diff-shell {
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+}
+.diff-main {
+  min-width: 0;
+}
+.view-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 2px 0 10px;
+  background: linear-gradient(180deg, rgba(15, 16, 17, 0.98) 0%, rgba(15, 16, 17, 0.92) 72%, rgba(15, 16, 17, 0) 100%);
+}
+.toolbar-btn {
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(33, 34, 37, 0.96);
+  color: #d9dde3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.toolbar-btn:hover {
+  background: rgba(48, 49, 54, 0.98);
+}
+.toolbar-btn.is-active {
+  border-color: rgba(104, 156, 255, 0.36);
+  background: rgba(39, 46, 60, 0.98);
+  color: #9ec6ff;
+}
+.toolbar-btn svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.file-tree-panel {
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-12px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+body.tree-open .file-tree-panel {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+.file-tree-shell {
+  padding: 6px 0 0;
+}
+.file-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 0 2px;
+}
+.file-tree-count {
+  font-size: 14px;
+  font-weight: 700;
+  color: #cfd4db;
+}
+.file-tree-filter {
+  display: block;
+  margin-bottom: 16px;
+}
+.file-tree-filter input {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  background: rgba(51, 52, 56, 0.92);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.2;
+}
+.file-tree-filter input::placeholder {
+  color: #a0a5ad;
+}
+.file-tree-stage {
+  margin-bottom: 18px;
+}
+.file-tree-stage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 2px 10px;
+}
+.file-tree-stage-copy {
+  min-width: 0;
+}
+.file-tree-stage-title {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.tree-stage-heading-unstaged {
+  color: #7ee7a7;
+}
+.tree-stage-heading-staged {
+  color: #9ec6ff;
+}
+.file-tree-stage-subtitle {
+  margin-top: 2px;
+  color: #8f96a0;
+  font-size: 11px;
+  font-weight: 600;
+}
+.file-tree-stage-count {
+  flex: none;
+  min-width: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  color: #cbd1d9;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+.file-tree-groups {
+  display: block;
+}
+.tree-group {
+  display: block;
+}
+.tree-group > summary::marker,
+.tree-group > summary::-webkit-details-marker {
+  display: none;
+  content: "";
+}
+.tree-children {
+  display: block;
+}
+.tree-row {
+  --depth: 0;
+  position: relative;
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px 7px calc(10px + (var(--depth) * 26px));
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.tree-row::before {
+  content: "";
+  position: absolute;
+  left: calc(18px + (var(--depth) * 26px));
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255,255,255,0.08);
+}
+.tree-row-dir {
+  cursor: pointer;
+  color: #c7ccd4;
+  font-weight: 700;
+}
+.tree-file {
+  cursor: pointer;
+}
+.tree-file:hover,
+.tree-file.is-active {
+  background: rgba(255,255,255,0.05);
+}
+.tree-file.is-active {
+  outline: 1px solid rgba(104, 156, 255, 0.3);
+  outline-offset: -1px;
+}
+.tree-caret,
+.tree-row-spacer {
+  position: relative;
+  z-index: 1;
+  width: 12px;
+  flex: none;
+  color: #c8ccd3;
+}
+.tree-caret::before {
+  content: "⌄";
+}
+.tree-group:not([open]) > summary .tree-caret::before {
+  content: "›";
+}
+.tree-row-spacer::before {
+  content: "";
+}
+.tree-icon {
+  position: relative;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: #cfd4db;
+}
+.tree-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tree-label {
+  min-width: 0;
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-stage-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.04);
+}
+.tree-stage-unstaged {
+  background: #7ee7a7;
+}
+.tree-stage-staged {
+  background: #9ec6ff;
+}
+.tree-empty {
+  padding: 16px 12px;
+  color: var(--muted);
+}
 .hero {
   margin-bottom: 18px;
   padding: 10px 6px 2px;
@@ -514,6 +958,10 @@ body {
   background: rgba(24, 25, 27, 0.96);
   overflow: hidden;
 }
+.file-card.is-active {
+  border-color: rgba(104, 156, 255, 0.38);
+  box-shadow: 0 0 0 1px rgba(104, 156, 255, 0.18);
+}
 .file-card > summary {
   list-style: none;
   display: flex;
@@ -524,8 +972,22 @@ body {
   cursor: pointer;
   background: rgba(30, 31, 34, 0.95);
 }
+.file-card > summary,
+.file-card > summary * {
+  cursor: pointer;
+}
+.file-card > summary {
+  user-select: none;
+  -webkit-user-select: none;
+}
 .file-card > summary::-webkit-details-marker {
   display: none;
+}
+.file-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 .file-path {
   font-size: 15px;
@@ -692,6 +1154,9 @@ body {
 .context-hidden {
   display: block;
 }
+.filter-hidden {
+  display: none !important;
+}
 "#
 }
 
@@ -852,8 +1317,190 @@ fn document_js() -> &'static str {
     const source = node.textContent || "";
     node.innerHTML = highlightLine(source, language);
   });
+
+  const body = document.body;
+  const treeButton = document.querySelector('[data-action="toggle-tree"]');
+  const fullscreenButton = document.querySelector('[data-action="toggle-fullscreen"]');
+  const filterInput = document.querySelector('[data-role="file-filter"]');
+  const fileCards = Array.from(document.querySelectorAll('.file-card'));
+  const treeFiles = Array.from(document.querySelectorAll('.tree-file'));
+  const treeGroups = Array.from(document.querySelectorAll('.tree-group'));
+
+  function postNativeAction(action) {
+    try {
+      const handler = window.webkit?.messageHandlers?.notTerminalDiff;
+      if (!handler) return false;
+      handler.postMessage(action);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function visibleCards() {
+    return fileCards.filter((card) => !card.classList.contains('filter-hidden'));
+  }
+
+  function activeCard() {
+    const activeId = body.dataset.activeFile || "";
+    return fileCards.find((card) => card.dataset.fileId === activeId) || null;
+  }
+
+  function firstPreferredCard() {
+    return visibleCards().find((card) => card.dataset.stage === 'Unstaged')
+      || visibleCards()[0]
+      || fileCards.find((card) => card.dataset.stage === 'Unstaged')
+      || fileCards[0]
+      || null;
+  }
+
+  function setActiveFile(fileId, options = {}) {
+    const card = fileCards.find((candidate) => candidate.dataset.fileId === fileId);
+    if (!card) return;
+
+    body.dataset.activeFile = fileId;
+    fileCards.forEach((candidate) => {
+      candidate.classList.toggle('is-active', candidate === card);
+    });
+    treeFiles.forEach((item) => {
+      item.classList.toggle('is-active', item.dataset.fileTarget === fileId);
+    });
+
+    if (!card.open) {
+      card.open = true;
+    }
+
+    if (options.scroll) {
+      card.scrollIntoView({ block: 'start', behavior: 'auto' });
+    }
+  }
+
+  function syncToolbar() {
+    const treeOpen = body.classList.contains('tree-open');
+    const splitZoomed = fullscreenButton?.classList.contains('is-active') || false;
+
+    if (treeButton) {
+      treeButton.classList.toggle('is-active', treeOpen);
+      treeButton.title = treeOpen ? 'Hide file tree' : 'Show file tree';
+      treeButton.setAttribute('aria-label', treeButton.title);
+    }
+
+    if (fullscreenButton) {
+      fullscreenButton.title = splitZoomed ? 'Exit fullscreen' : 'Enter fullscreen';
+      fullscreenButton.setAttribute('aria-label', fullscreenButton.title);
+    }
+  }
+
+  function toggleTree() {
+    body.classList.toggle('tree-open');
+    syncToolbar();
+  }
+
+  function toggleFullscreen() {
+    if (!activeCard()) {
+      const preferred = firstPreferredCard();
+      if (!preferred) return;
+      setActiveFile(preferred.dataset.fileId, { scroll: false });
+    }
+
+    if (!fullscreenButton) return;
+
+    fullscreenButton.classList.toggle('is-active');
+    syncToolbar();
+    postNativeAction('toggle-split-zoom');
+
+    const card = activeCard();
+    if (card) {
+      card.scrollIntoView({ block: 'start', behavior: 'auto' });
+    }
+  }
+
+  function applyFilter() {
+    const term = (filterInput?.value || '').trim().toLowerCase();
+
+    treeFiles.forEach((item) => {
+      const matches = !term || (item.dataset.filterText || '').toLowerCase().includes(term);
+      item.classList.toggle('filter-hidden', !matches);
+    });
+
+    treeGroups.forEach((group) => {
+      const anyVisible = group.querySelector('.tree-file:not(.filter-hidden)');
+      group.classList.toggle('filter-hidden', !anyVisible);
+      if (anyVisible) {
+        group.open = true;
+      }
+    });
+
+    document.querySelectorAll('.file-tree-stage').forEach((section) => {
+      const hasVisibleTreeRow = section.querySelector('.tree-file:not(.filter-hidden), .tree-dir:not(.filter-hidden)');
+      section.classList.toggle('filter-hidden', !hasVisibleTreeRow && !!term);
+    });
+
+    fileCards.forEach((card) => {
+      const haystack = ((card.dataset.search || '') + ' ' + (card.dataset.stage || '')).toLowerCase();
+      const matches = !term || haystack.includes(term);
+      card.classList.toggle('filter-hidden', !matches);
+    });
+
+    document.querySelectorAll('.diff-section').forEach((section) => {
+      const hasVisibleCard = section.querySelector('.file-card:not(.filter-hidden)');
+      const emptyState = section.querySelector('.empty-state');
+      section.classList.toggle('filter-hidden', !hasVisibleCard && !emptyState);
+    });
+
+    const current = activeCard();
+    if (!current || current.classList.contains('filter-hidden')) {
+      const preferred = firstPreferredCard();
+      if (preferred) {
+        setActiveFile(preferred.dataset.fileId, { scroll: false });
+      }
+    }
+  }
+
+  treeButton?.addEventListener('click', toggleTree);
+  fullscreenButton?.addEventListener('click', toggleFullscreen);
+  filterInput?.addEventListener('input', applyFilter);
+
+  fileCards.forEach((card) => {
+    const summary = card.querySelector('summary');
+    summary?.addEventListener('click', (event) => {
+      event.preventDefault();
+      const nextOpen = !card.open;
+      setActiveFile(card.dataset.fileId || '', { scroll: false });
+      card.open = nextOpen;
+    });
+  });
+
+  treeFiles.forEach((item) => {
+    item.addEventListener('click', () => {
+      const fileId = item.dataset.fileTarget || '';
+      setActiveFile(fileId, { scroll: true });
+    });
+  });
+
+  const preferred = firstPreferredCard();
+  if (preferred) {
+    setActiveFile(preferred.dataset.fileId || '', { scroll: false });
+  }
+  syncToolbar();
 })();
 "###
+}
+
+fn tree_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="4.5" width="15" height="15" rx="2.5"></rect><path d="M12 8v8"></path><path d="M8 12h8"></path></svg>"#
+}
+
+fn fullscreen_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5H4.5V8"></path><path d="M16 4.5h3.5V8"></path><path d="M8 19.5H4.5V16"></path><path d="M16 19.5h3.5V16"></path></svg>"#
+}
+
+fn folder_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l1.6 1.8H19A1.5 1.5 0 0 1 20.5 9.3v7.2A1.5 1.5 0 0 1 19 18H5a1.5 1.5 0 0 1-1.5-1.5Z"></path></svg>"#
+}
+
+fn file_icon() -> &'static str {
+    r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4.5h6l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 7 19V6A1.5 1.5 0 0 1 8.5 4.5Z"></path><path d="M14 4.5V9h4"></path></svg>"#
 }
 
 fn infer_language(path: &str) -> &'static str {

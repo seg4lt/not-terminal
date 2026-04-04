@@ -1,4 +1,4 @@
-use crate::app::diff_runtime::DiffPaneRuntime;
+use crate::app::diff_runtime::{DiffPaneAction, DiffPaneRuntime};
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyGotoSplitDirection, GhosttyResizeSplitDirection, GhosttyRuntimeAction,
     GhosttySplitDirection, host_view_free, host_view_set_frame, host_view_set_hidden,
@@ -50,10 +50,16 @@ pub(crate) enum DiffPaneToggle {
     Closed,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeDiffAction {
+    pub(crate) pane_id: String,
+    pub(crate) action: DiffPaneAction,
+}
+
 pub(crate) struct PaneRuntime {
     pub(crate) id: String,
-    pub(crate) host_view: usize,
     pub(crate) ghostty: GhosttyEmbed,
+    host_view: HostViewHandle,
     last_frame: Option<(f64, f64, f64, f64)>,
     last_size_px: Option<(u32, u32)>,
     last_scale: Option<f64>,
@@ -67,8 +73,8 @@ impl PaneRuntime {
     pub(crate) fn new(id: String, host_view: usize, ghostty: GhosttyEmbed) -> Self {
         Self {
             id,
-            host_view,
             ghostty,
+            host_view: HostViewHandle(host_view),
             last_frame: None,
             last_size_px: None,
             last_scale: None,
@@ -82,11 +88,18 @@ impl PaneRuntime {
     pub(crate) fn surface_ptr(&self) -> usize {
         self.ghostty.surface_ptr()
     }
+
+    pub(crate) fn host_view(&self) -> usize {
+        self.host_view.0
+    }
 }
 
-impl Drop for PaneRuntime {
+struct HostViewHandle(usize);
+
+impl Drop for HostViewHandle {
     fn drop(&mut self) {
-        host_view_free(self.host_view);
+        // Keep the host NSView alive until Ghostty has fully torn down the surface.
+        host_view_free(self.0);
     }
 }
 
@@ -171,7 +184,7 @@ impl RuntimeSession {
         self.panes
             .get(&pane_id)
             .and_then(SessionPane::terminal)
-            .map(|pane| pane.host_view)
+            .map(PaneRuntime::host_view)
     }
 
     pub(crate) fn ghostty_for_surface_mut(
@@ -335,13 +348,13 @@ impl RuntimeSession {
                     );
                     let frame_changed = pane.last_frame != Some(frame);
                     if frame_changed {
-                        host_view_set_frame(pane.host_view, frame.0, frame.1, frame.2, frame.3);
+                        host_view_set_frame(pane.host_view(), frame.0, frame.1, frame.2, frame.3);
                         pane.last_frame = Some(frame);
                     }
 
                     let hidden_changed = pane.last_hidden != Some(false);
                     if hidden_changed {
-                        host_view_set_hidden(pane.host_view, false);
+                        host_view_set_hidden(pane.host_view(), false);
                         pane.last_hidden = Some(false);
                     }
                     let occlusion_changed = pane.last_occluded != Some(true);
@@ -368,14 +381,14 @@ impl RuntimeSession {
                     let focused = pane_id == &self.active_pane_id;
                     let focus_changed = pane.last_focus != Some(focused);
                     if focus_changed {
-                        host_view_set_search_active(pane.host_view, focused);
+                        host_view_set_search_active(pane.host_view(), focused);
                         pane.ghostty.set_focus(focused);
                         pane.last_focus = Some(focused);
                     }
 
                     let split_badge = (false, focused);
                     if has_splits || pane.last_split_badge != Some(split_badge) {
-                        host_view_set_split_badge(pane.host_view, split_badge.0, split_badge.1);
+                        host_view_set_split_badge(pane.host_view(), split_badge.0, split_badge.1);
                         pane.last_split_badge = Some(split_badge);
                     }
 
@@ -783,6 +796,33 @@ impl RuntimeSession {
         true
     }
 
+    pub(crate) fn toggle_split_zoom_for_pane(&mut self, pane_id: &str) -> bool {
+        if self.panes.len() <= 1 || !self.panes.contains_key(pane_id) {
+            return false;
+        }
+
+        if self.zoomed_pane_id.as_deref() == Some(pane_id) {
+            self.zoomed_pane_id = None;
+        } else {
+            self.zoomed_pane_id = Some(pane_id.to_string());
+        }
+        true
+    }
+
+    pub(crate) fn drain_diff_actions(&mut self) -> Vec<RuntimeDiffAction> {
+        self.panes
+            .iter_mut()
+            .filter_map(|(pane_id, pane)| {
+                let pane = pane.diff_mut()?;
+                let action = pane.take_action()?;
+                Some(RuntimeDiffAction {
+                    pane_id: pane_id.clone(),
+                    action,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn pane_id_for_surface(&self, surface_ptr: usize) -> Option<String> {
         if surface_ptr == 0 {
             return None;
@@ -905,15 +945,15 @@ fn hide_session_pane(pane: &mut SessionPane) {
     match pane {
         SessionPane::Terminal(pane) => {
             if pane.last_hidden != Some(true) {
-                host_view_set_hidden(pane.host_view, true);
+                host_view_set_hidden(pane.host_view(), true);
                 pane.last_hidden = Some(true);
             }
             if pane.last_split_badge != Some((false, false)) {
-                host_view_set_split_badge(pane.host_view, false, false);
+                host_view_set_split_badge(pane.host_view(), false, false);
                 pane.last_split_badge = Some((false, false));
             }
             if pane.last_focus != Some(false) {
-                host_view_set_search_active(pane.host_view, false);
+                host_view_set_search_active(pane.host_view(), false);
                 pane.ghostty.set_focus(false);
                 pane.last_focus = Some(false);
             }
