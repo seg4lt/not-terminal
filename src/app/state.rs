@@ -8,9 +8,11 @@ use crate::app::model::{
     next_project_name, next_terminal_name,
 };
 use crate::app::persistence;
+use crate::app::project_search::{ProjectSearchPreview, ProjectSearchResponse};
 use crate::app::runtime::{
-    PaneRuntime, RuntimeDiffAction, RuntimeSession, SplitAxis, SplitDivider,
+    PaneRuntime, RuntimeDiffAction, RuntimeSearchAction, RuntimeSession, SplitAxis, SplitDivider,
 };
+use crate::app::search_runtime::SearchPaneRuntime;
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyProgressReportState, GhosttyRuntimeAction, host_view_focus_terminal,
     host_view_free, host_view_new, ns_view_ptr, parent_view_reclaim_focus,
@@ -264,6 +266,7 @@ pub(crate) struct SplitResizeDragState {
 #[derive(Debug, Clone)]
 pub(crate) enum CommandPaletteAction {
     OpenQuickOpen,
+    ToggleProjectSearchView,
     ToggleSidebar,
     NewTerminal,
     NewDetachedTerminal,
@@ -439,6 +442,21 @@ pub(crate) enum Message {
     QuickOpenSubmit,
     QuickOpenSelect(usize),
     QuickOpenCloseTerminal(String),
+    ToggleProjectSearchView,
+    ProjectSearchResultsLoaded {
+        request_id: u64,
+        terminal_id: String,
+        worktree_path: String,
+        query: String,
+        result: Result<ProjectSearchResponse, String>,
+    },
+    ProjectSearchPreviewLoaded {
+        request_id: u64,
+        terminal_id: String,
+        worktree_path: String,
+        path: String,
+        result: Result<ProjectSearchPreview, String>,
+    },
     TerminalSearchNext,
     TerminalSearchPrevious,
     TerminalSearchClose,
@@ -606,7 +624,10 @@ impl App {
         }
 
         if !self.runtimes.is_empty() {
-            let cadence = if !self.diff_refresh_deadlines.is_empty() {
+            let search_view_open = self.runtimes.values().any(RuntimeSession::has_search_view);
+            let cadence = if search_view_open {
+                Duration::from_millis(16)
+            } else if !self.diff_refresh_deadlines.is_empty() {
                 Duration::from_millis(50)
             } else if !self.terminal_progress_active.is_empty() {
                 Duration::from_millis(120)
@@ -1481,6 +1502,12 @@ impl App {
                 "terminal worktree switch search open",
             ),
             command_palette_entry(
+                CommandPaletteAction::ToggleProjectSearchView,
+                format!("Search in {active_worktree_label}"),
+                "Search the active worktree contents • Cmd+Shift+F",
+                "project search grep find text symbol code worktree repo",
+            ),
+            command_palette_entry(
                 CommandPaletteAction::ToggleSidebar,
                 "Toggle Sidebar",
                 "Show or hide the sidebar • Cmd+1",
@@ -2169,6 +2196,27 @@ impl App {
         ))
     }
 
+    pub(crate) fn create_search_pane_runtime(
+        &self,
+        worktree_path: &str,
+    ) -> Result<SearchPaneRuntime, String> {
+        let Some(parent_ns_view) = self.host_ns_view else {
+            return Err(String::from("failed to resolve host NSView"));
+        };
+
+        let Some(webview) = WebView::new_hosted(parent_ns_view) else {
+            return Err(String::from("failed to create search webview"));
+        };
+
+        webview.set_keyboard_enabled(false);
+
+        Ok(SearchPaneRuntime::new(
+            create_id("search"),
+            webview,
+            worktree_path.to_string(),
+        ))
+    }
+
     pub(crate) fn diff_watch_specs(&self) -> Vec<git_watch::DiffWatchSpec> {
         let mut specs = self
             .runtimes
@@ -2435,6 +2483,26 @@ impl App {
         }
 
         changed
+    }
+
+    pub(crate) fn drain_search_pane_actions(&mut self) -> Vec<(String, RuntimeSearchAction)> {
+        let terminal_ids: Vec<String> = self.runtimes.keys().cloned().collect();
+        let mut actions = Vec::new();
+
+        for terminal_id in terminal_ids {
+            let pane_actions = if let Some(runtime) = self.runtimes.get_mut(&terminal_id) {
+                runtime.drain_search_actions()
+            } else {
+                continue;
+            };
+            actions.extend(
+                pane_actions
+                    .into_iter()
+                    .map(|action| (terminal_id.clone(), action)),
+            );
+        }
+
+        actions
     }
 
     pub(crate) fn remove_runtime(&mut self, terminal_id: &str) {

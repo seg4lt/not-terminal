@@ -1,5 +1,6 @@
 use crate::app::diff_runtime::{DiffPaneAction, DiffPaneRuntime};
 use crate::app::git_watch::DiffWatchSpec;
+use crate::app::search_runtime::{SearchPaneAction, SearchPaneRuntime};
 use crate::ghostty_embed::{
     GhosttyEmbed, GhosttyGotoSplitDirection, GhosttyResizeSplitDirection, GhosttyRuntimeAction,
     GhosttySplitDirection, host_view_free, host_view_set_frame, host_view_set_hidden,
@@ -57,6 +58,12 @@ pub(crate) struct RuntimeDiffAction {
     pub(crate) action: DiffPaneAction,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeSearchAction {
+    pub(crate) pane_id: String,
+    pub(crate) action: SearchPaneAction,
+}
+
 pub(crate) struct PaneRuntime {
     pub(crate) id: String,
     pub(crate) ghostty: GhosttyEmbed,
@@ -107,34 +114,49 @@ impl Drop for HostViewHandle {
 pub(crate) enum SessionPane {
     Terminal(PaneRuntime),
     Diff(DiffPaneRuntime),
+    Search(SearchPaneRuntime),
 }
 
 impl SessionPane {
     fn terminal(&self) -> Option<&PaneRuntime> {
         match self {
             Self::Terminal(pane) => Some(pane),
-            Self::Diff(_) => None,
+            Self::Diff(_) | Self::Search(_) => None,
         }
     }
 
     fn terminal_mut(&mut self) -> Option<&mut PaneRuntime> {
         match self {
             Self::Terminal(pane) => Some(pane),
-            Self::Diff(_) => None,
+            Self::Diff(_) | Self::Search(_) => None,
         }
     }
 
     fn diff(&self) -> Option<&DiffPaneRuntime> {
         match self {
-            Self::Terminal(_) => None,
+            Self::Terminal(_) | Self::Search(_) => None,
             Self::Diff(pane) => Some(pane),
         }
     }
 
     fn diff_mut(&mut self) -> Option<&mut DiffPaneRuntime> {
         match self {
-            Self::Terminal(_) => None,
+            Self::Terminal(_) | Self::Search(_) => None,
             Self::Diff(pane) => Some(pane),
+        }
+    }
+
+    fn search(&self) -> Option<&SearchPaneRuntime> {
+        match self {
+            Self::Search(pane) => Some(pane),
+            Self::Terminal(_) | Self::Diff(_) => None,
+        }
+    }
+
+    fn search_mut(&mut self) -> Option<&mut SearchPaneRuntime> {
+        match self {
+            Self::Search(pane) => Some(pane),
+            Self::Terminal(_) | Self::Diff(_) => None,
         }
     }
 }
@@ -207,10 +229,21 @@ impl RuntimeSession {
         self.diff_pane_id().is_some()
     }
 
+    pub(crate) fn has_search_view(&self) -> bool {
+        self.search_pane_id().is_some()
+    }
+
     pub(crate) fn diff_worktree_path(&self) -> Option<String> {
         self.panes
             .values()
             .find_map(SessionPane::diff)
+            .map(|pane| pane.worktree_path.clone())
+    }
+
+    pub(crate) fn search_worktree_path(&self) -> Option<String> {
+        self.panes
+            .values()
+            .find_map(SessionPane::search)
             .map(|pane| pane.worktree_path.clone())
     }
 
@@ -427,6 +460,22 @@ impl RuntimeSession {
                         pane.last_hidden = Some(false);
                     }
                 }
+                SessionPane::Search(pane) => {
+                    let frame = (
+                        (frame_x + rect.x) as f64,
+                        (frame_y + rect.y) as f64,
+                        rect.width.max(1.0) as f64,
+                        rect.height.max(1.0) as f64,
+                    );
+                    if pane.last_frame != Some(frame) {
+                        pane.webview.set_frame(frame.0, frame.1, frame.2, frame.3);
+                        pane.last_frame = Some(frame);
+                    }
+                    if pane.last_hidden != Some(false) {
+                        pane.webview.set_hidden(false);
+                        pane.last_hidden = Some(false);
+                    }
+                }
             }
         }
     }
@@ -599,6 +648,10 @@ impl RuntimeSession {
             }
         }
 
+        if let Some(existing_search_id) = self.search_pane_id() {
+            self.remove_pane(&existing_search_id);
+        }
+
         let new_id = diff_pane.id.clone();
         let replacement = SplitNode::Branch {
             axis: SplitAxis::Vertical,
@@ -612,6 +665,48 @@ impl RuntimeSession {
         }
 
         self.panes.insert(new_id, SessionPane::Diff(diff_pane));
+        self.active_pane_id = source_id;
+        self.zoomed_pane_id = None;
+        Some(DiffPaneToggle::Opened)
+    }
+
+    pub(crate) fn toggle_search_right(
+        &mut self,
+        search_pane: SearchPaneRuntime,
+    ) -> Option<DiffPaneToggle> {
+        let source_id = self.active_terminal_pane_id()?;
+        let worktree_path = search_pane.worktree_path.clone();
+
+        if let Some(existing_id) = self.search_pane_id() {
+            let is_same = self
+                .panes
+                .get(&existing_id)
+                .and_then(SessionPane::search)
+                .is_some_and(|pane| pane.worktree_path == worktree_path);
+            self.remove_pane(&existing_id);
+            if is_same {
+                self.active_pane_id = source_id;
+                return Some(DiffPaneToggle::Closed);
+            }
+        }
+
+        if let Some(existing_diff_id) = self.diff_pane_id() {
+            self.remove_pane(&existing_diff_id);
+        }
+
+        let new_id = search_pane.id.clone();
+        let replacement = SplitNode::Branch {
+            axis: SplitAxis::Vertical,
+            ratio: 0.5,
+            first: Box::new(SplitNode::Leaf(source_id.clone())),
+            second: Box::new(SplitNode::Leaf(new_id.clone())),
+        };
+
+        if !replace_leaf(&mut self.root, &source_id, replacement) {
+            return None;
+        }
+
+        self.panes.insert(new_id, SessionPane::Search(search_pane));
         self.active_pane_id = source_id;
         self.zoomed_pane_id = None;
         Some(DiffPaneToggle::Opened)
@@ -652,6 +747,16 @@ impl RuntimeSession {
         };
         pane.reset_font_size();
         true
+    }
+
+    pub(crate) fn search_pane_mut_for_worktree(
+        &mut self,
+        worktree_path: &str,
+    ) -> Option<&mut SearchPaneRuntime> {
+        self.panes
+            .values_mut()
+            .find_map(SessionPane::search_mut)
+            .filter(|pane| pane.worktree_path == worktree_path)
     }
 
     pub(crate) fn goto_split_from_surface(
@@ -855,6 +960,25 @@ impl RuntimeSession {
         removed
     }
 
+    pub(crate) fn close_search_view(&mut self) -> bool {
+        let Some(search_pane_id) = self.search_pane_id() else {
+            return false;
+        };
+        if let Some(search_pane) = self
+            .panes
+            .get(&search_pane_id)
+            .and_then(SessionPane::search)
+        {
+            search_pane.webview.lose_focus();
+        }
+        let active_terminal_id = self.active_terminal_pane_id();
+        let removed = self.remove_pane(&search_pane_id);
+        if removed && let Some(active_terminal_id) = active_terminal_id {
+            self.active_pane_id = active_terminal_id;
+        }
+        removed
+    }
+
     pub(crate) fn drain_diff_actions(&mut self) -> Vec<RuntimeDiffAction> {
         self.panes
             .iter_mut()
@@ -862,6 +986,20 @@ impl RuntimeSession {
                 let pane = pane.diff_mut()?;
                 let action = pane.take_action()?;
                 Some(RuntimeDiffAction {
+                    pane_id: pane_id.clone(),
+                    action,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn drain_search_actions(&mut self) -> Vec<RuntimeSearchAction> {
+        self.panes
+            .iter_mut()
+            .filter_map(|(pane_id, pane)| {
+                let pane = pane.search_mut()?;
+                let action = pane.take_action()?;
+                Some(RuntimeSearchAction {
                     pane_id: pane_id.clone(),
                     action,
                 })
@@ -973,6 +1111,12 @@ impl RuntimeSession {
             .find_map(|(pane_id, pane)| pane.diff().map(|_| pane_id.clone()))
     }
 
+    fn search_pane_id(&self) -> Option<String> {
+        self.panes
+            .iter()
+            .find_map(|(pane_id, pane)| pane.search().map(|_| pane_id.clone()))
+    }
+
     fn is_terminal_pane_id(&self, pane_id: &str) -> bool {
         self.panes
             .get(pane_id)
@@ -1009,6 +1153,13 @@ fn hide_session_pane(pane: &mut SessionPane) {
             }
         }
         SessionPane::Diff(pane) => {
+            if pane.last_hidden != Some(true) {
+                pane.webview.lose_focus();
+                pane.webview.set_hidden(true);
+                pane.last_hidden = Some(true);
+            }
+        }
+        SessionPane::Search(pane) => {
             if pane.last_hidden != Some(true) {
                 pane.webview.lose_focus();
                 pane.webview.set_hidden(true);

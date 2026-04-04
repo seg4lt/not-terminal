@@ -1,3 +1,5 @@
 /target
 .DS_Store
 build
+.codex-tmp-diffs
+frontend/search-pane/node_modules

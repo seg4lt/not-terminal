@@ -10,6 +10,7 @@ pub(crate) enum ShortcutAction {
     OpenInPreferredEditor,
     OpenInSecondaryEditor,
     OpenQuickOpen,
+    ToggleProjectSearchView,
     OpenCommandPalette,
     ToggleDiffView,
     OpenPreferences,
@@ -126,6 +127,10 @@ pub(crate) fn detect_shortcut(
             return Some(ShortcutAction::OpenCommandPalette);
         }
 
+        if is_key_f(key_char.as_deref(), physical_key) {
+            return Some(ShortcutAction::ToggleProjectSearchView);
+        }
+
         if is_key_t(key_char.as_deref(), physical_key) {
             return Some(ShortcutAction::NewDetachedTerminal);
         }
@@ -216,6 +221,10 @@ fn is_letter(value: Option<&str>, target: &str) -> bool {
 
 fn is_key_p(value: Option<&str>, physical: &Physical) -> bool {
     is_letter(value, "p") || matches!(physical, Physical::Code(Code::KeyP))
+}
+
+fn is_key_f(value: Option<&str>, physical: &Physical) -> bool {
+    is_letter(value, "f") || matches!(physical, Physical::Code(Code::KeyF))
 }
 
 fn is_key_t(value: Option<&str>, physical: &Physical) -> bool {

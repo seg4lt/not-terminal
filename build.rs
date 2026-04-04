@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    build_search_frontend();
+
     println!("cargo:rerun-if-changed=src/ghostty_runtime_shim.m");
     println!("cargo:rerun-if-changed=src/webview_shim.m");
     println!("cargo:rerun-if-changed=vendor/ghostty/include/ghostty.h");
@@ -93,5 +95,69 @@ fn build_ghostty_static() {
 
     if !status.success() {
         panic!("zig build failed while producing Ghostty static library");
+    }
+}
+
+fn build_search_frontend() {
+    let frontend_dir = Path::new("frontend/search-pane");
+    if !frontend_dir.exists() {
+        return;
+    }
+
+    println!("cargo:rerun-if-changed=frontend/search-pane/package.json");
+    println!("cargo:rerun-if-changed=frontend/search-pane/bun.lock");
+    println!("cargo:rerun-if-changed=frontend/search-pane/src/main.js");
+
+    ensure_bun_dependencies(frontend_dir);
+
+    let out_dir =
+        PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR missing for search frontend build"));
+    let output_file = out_dir.join("project_search_bundle.js");
+
+    let status = Command::new("bun")
+        .current_dir(frontend_dir)
+        .args([
+            "build",
+            "./src/main.js",
+            "--outfile",
+            output_file
+                .to_str()
+                .expect("search frontend output path is not valid UTF-8"),
+            "--target=browser",
+            "--format=iife",
+            "--minify",
+        ])
+        .status()
+        .expect("failed to execute bun build for search frontend");
+
+    if !status.success() {
+        panic!("bun build failed while producing project search frontend bundle");
+    }
+}
+
+fn ensure_bun_dependencies(frontend_dir: &Path) {
+    let installed = frontend_dir
+        .join("node_modules")
+        .join("@pierre")
+        .join("diffs")
+        .join("package.json");
+    if installed.exists() {
+        return;
+    }
+
+    let lockfile = frontend_dir.join("bun.lock");
+    let mut install = Command::new("bun");
+    install.current_dir(frontend_dir);
+    install.arg("install");
+    if lockfile.exists() {
+        install.arg("--frozen-lockfile");
+    }
+
+    let status = install
+        .status()
+        .expect("failed to execute bun install for search frontend");
+
+    if !status.success() {
+        panic!("bun install failed while preparing search frontend dependencies");
     }
 }

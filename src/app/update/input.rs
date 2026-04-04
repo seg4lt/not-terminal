@@ -63,6 +63,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
             | ShortcutAction::ModalFocusPrevious
             | ShortcutAction::ModalCloseQuickOpenTerminal
             | ShortcutAction::OpenQuickOpen
+            | ShortcutAction::ToggleProjectSearchView
             | ShortcutAction::OpenCommandPalette),
         ) = shortcut_action
         {
@@ -81,6 +82,7 @@ pub(super) fn handle_keyboard(app: &mut App, event: keyboard::Event) -> Task<Mes
                 | ShortcutAction::OpenInPreferredEditor
                 | ShortcutAction::OpenInSecondaryEditor
                 | ShortcutAction::OpenQuickOpen
+                | ShortcutAction::ToggleProjectSearchView
                 | ShortcutAction::OpenCommandPalette
                 | ShortcutAction::ToggleDiffView
                 | ShortcutAction::OpenPreferences
@@ -366,6 +368,9 @@ pub(super) fn apply_shortcut(app: &mut App, action: ShortcutAction) -> Task<Mess
         ShortcutAction::OpenInSecondaryEditor => super::update(app, Message::OpenInSecondaryEditor),
         ShortcutAction::OpenQuickOpen => {
             super::update(app, Message::OpenQuickOpen(!app.quick_open_open))
+        }
+        ShortcutAction::ToggleProjectSearchView => {
+            super::update(app, Message::ToggleProjectSearchView)
         }
         ShortcutAction::OpenCommandPalette => {
             super::update(app, Message::OpenCommandPalette(!app.command_palette_open))

@@ -1,16 +1,19 @@
 use super::state::{App, Message};
 use crate::app::git_diff;
-use crate::app::runtime::DiffPaneToggle;
+use crate::app::project_search;
+use crate::app::runtime::{DiffPaneToggle, RuntimeSearchAction, RuntimeSession};
+use crate::app::search_runtime::SearchPaneAction;
 use crate::app::shortcuts::ShortcutAction;
 use crate::app::state::{
     AddProjectOutcome, COMMAND_PALETTE_SCROLL_ID, CommandPaletteAction, ProjectRescanSummary,
     QUICK_OPEN_SCROLL_ID, QuickOpenEntry, QuickOpenEntryKind,
 };
 use crate::ghostty_embed::{
-    disable_system_hide_shortcuts, host_view_focus_search, register_focus_toggle_hotkey,
-    take_pending_attention_badge_click,
+    disable_system_hide_shortcuts, host_view_focus_search, host_view_focus_terminal,
+    register_focus_toggle_hotkey, take_pending_attention_badge_click,
 };
 use iced::{Task, keyboard, widget::operation, window};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Instant;
@@ -215,7 +218,12 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
 
             let search_applied = app.apply_terminal_search_if_due(now);
             let diff_action_changed = app.process_diff_pane_actions();
-            if app.process_runtime_actions() || diff_action_changed || layout_changed {
+            let (search_action_changed, search_action_task) = process_search_pane_actions(app);
+            if app.process_runtime_actions()
+                || diff_action_changed
+                || search_action_changed
+                || layout_changed
+            {
                 app.sync_runtime_views();
             }
 
@@ -231,6 +239,7 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
                 modal_focus_task(app),
                 terminal_search_focus_task(app),
                 flush_due_diff_refresh_tasks(app, now),
+                search_action_task,
             ])
         }
         Message::Keyboard(event) => input::handle_keyboard(app, event),
@@ -616,6 +625,59 @@ pub(crate) fn update(app: &mut App, message: Message) -> Task<Message> {
             } else {
                 Task::none()
             }
+        }
+        Message::ToggleProjectSearchView => toggle_project_search_view(app),
+        Message::ProjectSearchResultsLoaded {
+            request_id,
+            terminal_id,
+            worktree_path,
+            query,
+            result,
+        } => {
+            let Some(runtime) = app.runtimes.get_mut(&terminal_id) else {
+                return Task::none();
+            };
+            let Some(search_pane) = runtime.search_pane_mut_for_worktree(&worktree_path) else {
+                return Task::none();
+            };
+            if !search_pane.matches_query_response(request_id, &query) {
+                return Task::none();
+            }
+            match result {
+                Ok(results) => {
+                    search_pane.set_results(&results);
+                }
+                Err(error) => {
+                    search_pane.set_error(&query, &error);
+                    app.status = format!("Project search failed: {error}");
+                }
+            }
+            Task::none()
+        }
+        Message::ProjectSearchPreviewLoaded {
+            request_id,
+            terminal_id,
+            worktree_path,
+            path,
+            result,
+        } => {
+            let Some(runtime) = app.runtimes.get_mut(&terminal_id) else {
+                return Task::none();
+            };
+            let Some(search_pane) = runtime.search_pane_mut_for_worktree(&worktree_path) else {
+                return Task::none();
+            };
+            if !search_pane.matches_preview_response(request_id, &path) {
+                return Task::none();
+            }
+            match result {
+                Ok(preview) => search_pane.set_preview(&preview),
+                Err(error) => {
+                    search_pane.clear_preview();
+                    app.status = format!("Failed to load search preview: {error}");
+                }
+            }
+            Task::none()
         }
         Message::QuickOpenQueryChanged(value) => {
             if app.quick_open_open && app.keyboard_modifiers.logo() {
@@ -1409,6 +1471,9 @@ fn activate_quick_open_entry(app: &mut App, entry: &QuickOpenEntry) -> bool {
 fn activate_command_palette_action(app: &mut App, action: CommandPaletteAction) -> Task<Message> {
     match action {
         CommandPaletteAction::OpenQuickOpen => update(app, Message::OpenQuickOpen(true)),
+        CommandPaletteAction::ToggleProjectSearchView => {
+            update(app, Message::ToggleProjectSearchView)
+        }
         CommandPaletteAction::ToggleSidebar => update(app, Message::ToggleSidebar),
         CommandPaletteAction::NewTerminal => {
             input::apply_shortcut(app, ShortcutAction::NewTerminal)
@@ -1596,6 +1661,143 @@ fn toggle_diff_view(app: &mut App) -> Task<Message> {
     }
 }
 
+fn toggle_project_search_view(app: &mut App) -> Task<Message> {
+    if app.active_browser().is_some() {
+        app.status = String::from("Close the browser panel before opening project search");
+        return Task::none();
+    }
+
+    let Some(context) = app.active_terminal_context() else {
+        app.status = String::from("No active terminal to search");
+        return Task::none();
+    };
+
+    let Some(worktree_path) = context.worktree_path.clone() else {
+        app.status = String::from("The active terminal is not attached to a git worktree");
+        return Task::none();
+    };
+
+    if let Err(error) = app.ensure_runtime_for_terminal(&context.terminal_id) {
+        app.status = error;
+        return Task::none();
+    }
+
+    let search_pane = match app.create_search_pane_runtime(&worktree_path) {
+        Ok(pane) => pane,
+        Err(error) => {
+            app.status = error;
+            return Task::none();
+        }
+    };
+
+    let Some(outcome) = app
+        .runtimes
+        .get_mut(&context.terminal_id)
+        .and_then(|runtime| runtime.toggle_search_right(search_pane))
+    else {
+        app.status = String::from("Failed to toggle the search split");
+        return Task::none();
+    };
+
+    app.quick_open_open = false;
+    app.command_palette_open = false;
+    app.preferences_open = false;
+    app.rename_dialog = None;
+    app.add_worktree_dialog = None;
+    app.worktree_context_menu = None;
+    app.project_context_menu = None;
+    app.sync_runtime_views();
+
+    match outcome {
+        DiffPaneToggle::Opened => {
+            app.status = format!("Opened project search for {}", context.worktree_name);
+            Task::none()
+        }
+        DiffPaneToggle::Closed => {
+            app.status = String::from("Closed project search");
+            Task::none()
+        }
+    }
+}
+
+fn process_search_pane_actions(app: &mut App) -> (bool, Task<Message>) {
+    let mut changed = false;
+    let mut tasks = Vec::new();
+
+    for (terminal_id, RuntimeSearchAction { pane_id, action }) in app.drain_search_pane_actions() {
+        let action_changed = match action {
+            SearchPaneAction::ToggleSplitZoom => app
+                .runtimes
+                .get_mut(&terminal_id)
+                .is_some_and(|runtime| runtime.toggle_split_zoom_for_pane(&pane_id)),
+            SearchPaneAction::ToggleProjectSearchView => {
+                let changed = app
+                    .runtimes
+                    .get_mut(&terminal_id)
+                    .is_some_and(RuntimeSession::close_search_view);
+                if changed
+                    && !app.modal_open()
+                    && let Some(host_view) = app.active_terminal_host_view()
+                {
+                    host_view_focus_terminal(host_view);
+                }
+                changed
+            }
+            SearchPaneAction::QueryChanged(query) => {
+                if let Some(runtime) = app.runtimes.get_mut(&terminal_id)
+                    && let Some(worktree_path) = runtime.search_worktree_path()
+                    && let Some(search_pane) = runtime.search_pane_mut_for_worktree(&worktree_path)
+                {
+                    let trimmed = query.trim().to_string();
+                    let request_id = search_pane.begin_query(trimmed.clone());
+                    search_pane.set_loading(&trimmed);
+                    if trimmed.is_empty() {
+                        search_pane.clear_results(&trimmed);
+                    } else {
+                        tasks.push(load_project_search_task(
+                            terminal_id.clone(),
+                            worktree_path,
+                            request_id,
+                            trimmed,
+                        ));
+                    }
+                }
+                false
+            }
+            SearchPaneAction::SelectFile(path) => {
+                if let Some(runtime) = app.runtimes.get_mut(&terminal_id)
+                    && let Some(worktree_path) = runtime.search_worktree_path()
+                    && let Some(search_pane) = runtime.search_pane_mut_for_worktree(&worktree_path)
+                    && let Some((request_id, matches)) = search_pane.begin_preview(path.clone())
+                {
+                    tasks.push(load_project_search_preview_task(
+                        terminal_id.clone(),
+                        worktree_path,
+                        path,
+                        request_id,
+                        matches,
+                    ));
+                }
+                false
+            }
+            SearchPaneAction::OpenResult { path, line, column } => {
+                open_project_search_location(app, &terminal_id, &path, line, column);
+                false
+            }
+        };
+        changed = changed || action_changed;
+    }
+
+    (
+        changed,
+        if tasks.is_empty() {
+            Task::none()
+        } else {
+            Task::batch(tasks)
+        },
+    )
+}
+
 fn refresh_active_diff_now_task(app: &mut App) -> Task<Message> {
     let Some(terminal_id) = app.active_terminal_id() else {
         return Task::none();
@@ -1647,6 +1849,51 @@ fn load_diff_task(terminal_id: String, worktree_path: String) -> Task<Message> {
     )
 }
 
+fn load_project_search_task(
+    terminal_id: String,
+    worktree_path: String,
+    request_id: u64,
+    query: String,
+) -> Task<Message> {
+    Task::perform(
+        {
+            let worktree_path = worktree_path.clone();
+            let query = query.clone();
+            async move { project_search::search(&worktree_path, &query) }
+        },
+        move |result| Message::ProjectSearchResultsLoaded {
+            request_id,
+            terminal_id,
+            worktree_path,
+            query,
+            result,
+        },
+    )
+}
+
+fn load_project_search_preview_task(
+    terminal_id: String,
+    worktree_path: String,
+    path: String,
+    request_id: u64,
+    matches: Vec<crate::app::project_search::ProjectSearchMatch>,
+) -> Task<Message> {
+    Task::perform(
+        {
+            let worktree_path = worktree_path.clone();
+            let path = path.clone();
+            async move { project_search::load_preview(&worktree_path, &path, matches) }
+        },
+        move |result| Message::ProjectSearchPreviewLoaded {
+            request_id,
+            terminal_id,
+            worktree_path,
+            path,
+            result,
+        },
+    )
+}
+
 fn open_active_worktree_in_editor(
     app: &mut App,
     editor_command: &str,
@@ -1670,7 +1917,7 @@ fn open_active_worktree_in_editor(
         return Task::none();
     };
 
-    match open_in_editor_command(editor_command, &target_path) {
+    match open_in_editor_command(editor_command, &target_path, None, None) {
         Ok(()) => {
             app.status = format!("Opened {} in {}", target_path, editor_command);
         }
@@ -1682,7 +1929,51 @@ fn open_active_worktree_in_editor(
     Task::none()
 }
 
-fn open_in_editor_command(editor_command: &str, target_path: &str) -> Result<(), String> {
+fn open_project_search_location(
+    app: &mut App,
+    terminal_id: &str,
+    relative_path: &str,
+    line: usize,
+    column: usize,
+) {
+    let editor_command = app.persisted.ui.preferred_editor_command.trim();
+    if editor_command.is_empty() {
+        app.status = String::from("Set a preferred editor command in Preferences");
+        return;
+    }
+
+    if editor_command.chars().any(char::is_whitespace) {
+        app.status = String::from("Preferred editor must be a single command like zed or code");
+        return;
+    }
+
+    let Some(worktree_path) = app
+        .runtimes
+        .get(terminal_id)
+        .and_then(RuntimeSession::search_worktree_path)
+    else {
+        app.status = String::from("No active worktree search pane to open from");
+        return;
+    };
+
+    let target_path = PathBuf::from(&worktree_path).join(relative_path);
+    let target_path = target_path.to_string_lossy().to_string();
+    match open_in_editor_command(editor_command, &target_path, Some(line), Some(column)) {
+        Ok(()) => {
+            app.status = format!("Opened {}:{} in {}", relative_path, line, editor_command);
+        }
+        Err(error) => {
+            app.status = format!("Failed to open editor: {error}");
+        }
+    }
+}
+
+fn open_in_editor_command(
+    editor_command: &str,
+    target_path: &str,
+    line: Option<usize>,
+    column: Option<usize>,
+) -> Result<(), String> {
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -1710,9 +2001,20 @@ fn open_in_editor_command(editor_command: &str, target_path: &str) -> Result<(),
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("editor command not found: {}", editor_command))?;
 
-    let mut child = Command::new(resolved)
-        .arg(".")
-        .current_dir(target_path)
+    let mut command = Command::new(resolved);
+    configure_editor_command(&mut command, resolved, target_path, line, column);
+
+    let working_dir = if PathBuf::from(target_path).is_dir() {
+        PathBuf::from(target_path)
+    } else {
+        PathBuf::from(target_path)
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+
+    let mut child = command
+        .current_dir(working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1724,6 +2026,45 @@ fn open_in_editor_command(editor_command: &str, target_path: &str) -> Result<(),
     });
 
     Ok(())
+}
+
+fn configure_editor_command(
+    command: &mut Command,
+    resolved_command: &str,
+    target_path: &str,
+    line: Option<usize>,
+    column: Option<usize>,
+) {
+    let basename = PathBuf::from(resolved_command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(resolved_command)
+        .to_ascii_lowercase();
+
+    match (line, column) {
+        (Some(line), Some(column))
+            if matches!(
+                basename.as_str(),
+                "code" | "cursor" | "codium" | "windsurf" | "zed"
+            ) =>
+        {
+            if basename == "code"
+                || basename == "cursor"
+                || basename == "codium"
+                || basename == "windsurf"
+            {
+                command.arg("--goto");
+            }
+            command.arg(format!("{target_path}:{line}:{column}"));
+        }
+        _ => {
+            if PathBuf::from(target_path).is_dir() {
+                command.arg(".");
+            } else {
+                command.arg(target_path);
+            }
+        }
+    }
 }
 
 fn capitalize(value: &str) -> String {

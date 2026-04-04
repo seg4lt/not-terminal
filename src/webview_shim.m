@@ -251,6 +251,15 @@ static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
         return YES;
     }
 
+    if (command && shift && !control && !option && [characters isEqualToString:@"f"]) {
+        if (self.rustWrapper->pending_action != NULL) {
+            free(self.rustWrapper->pending_action);
+            self.rustWrapper->pending_action = NULL;
+        }
+        self.rustWrapper->pending_action = strdup("toggle-project-search-view");
+        return YES;
+    }
+
     if (command && !control && !option) {
         const char *action = NULL;
         if ([characters isEqualToString:@"="] || [characters isEqualToString:@"+"]) {
