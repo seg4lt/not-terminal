@@ -2209,6 +2209,7 @@ impl App {
         };
 
         webview.set_keyboard_enabled(false);
+        webview.set_forward_scroll(true);
 
         Ok(SearchPaneRuntime::new(
             create_id("search"),

@@ -26,6 +26,7 @@ unsafe extern "C" {
     #[allow(dead_code)]
     fn webview_lose_focus(webview_ptr: *mut ());
     fn webview_set_keyboard_enabled(webview_ptr: *mut (), enabled: bool);
+    fn webview_set_forward_scroll(webview_ptr: *mut (), enabled: bool);
     #[allow(dead_code)]
     fn free(ptr: *mut std::ffi::c_void);
 }
@@ -208,6 +209,16 @@ impl WebView {
     pub fn set_keyboard_enabled(&self, enabled: bool) {
         unsafe {
             webview_set_keyboard_enabled(self.ptr.as_ptr(), enabled);
+        }
+    }
+
+    /// Enable JS-based scroll forwarding for inner overflow containers.
+    /// When enabled, native scrollWheel events are translated into JS scroll
+    /// calls targeting the scrollable ancestor under the cursor. Needed for
+    /// webviews whose document body isn't scrollable (e.g. project search).
+    pub fn set_forward_scroll(&self, enabled: bool) {
+        unsafe {
+            webview_set_forward_scroll(self.ptr.as_ptr(), enabled);
         }
     }
 }

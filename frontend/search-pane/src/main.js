@@ -1303,9 +1303,11 @@ function injectStyle() {
       min-height: 0;
       display: grid;
       grid-template-columns: 300px minmax(0, 1fr);
+      grid-template-rows: 1fr;
     }
     .results-panel {
       min-width: 0;
+      min-height: 0;
       display: grid;
       grid-template-rows: auto 1fr;
       border-right: 1px solid var(--border);
@@ -1313,6 +1315,7 @@ function injectStyle() {
     }
     .preview-panel {
       min-width: 0;
+      min-height: 0;
       display: grid;
       grid-template-rows: auto 1fr;
     }

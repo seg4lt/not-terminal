@@ -166,12 +166,14 @@ static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
 @interface KeyboardCapableWKWebView : WKWebView
 @property(nonatomic, assign) rust_webview_t *rustWrapper;
 @property(nonatomic, assign) BOOL keyboardEnabled;
+@property(nonatomic, assign) BOOL forwardScrollEvents;
 @end
 @implementation KeyboardCapableWKWebView
 - (instancetype)initWithFrame:(NSRect)frame configuration:(WKWebViewConfiguration *)config {
     self = [super initWithFrame:frame configuration:config];
     if (self) {
         _keyboardEnabled = YES;
+        _forwardScrollEvents = NO;
     }
     return self;
 }
@@ -285,6 +287,54 @@ static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
     }
 
     return [super performKeyEquivalent:event];
+}
+- (void)scrollWheel:(NSEvent *)event {
+    if (!self.forwardScrollEvents || event == nil) {
+        [super scrollWheel:event];
+        return;
+    }
+
+    CGFloat deltaX = -[event scrollingDeltaX];
+    CGFloat deltaY = -[event scrollingDeltaY];
+    if (deltaX == 0.0 && deltaY == 0.0) {
+        return;
+    }
+
+    // For non-precise (mouse wheel) deltas, values are in lines — convert
+    // to approximate pixel amounts so scrollTop/scrollLeft behave sensibly.
+    if (![event hasPreciseScrollingDeltas]) {
+        deltaX *= 40.0;
+        deltaY *= 40.0;
+    }
+
+    // Convert cursor position to webview coordinates (flip Y for web origin).
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    CGFloat webX = point.x;
+    CGFloat webY = self.bounds.size.height - point.y;
+
+    // Inject a synthetic scroll into the first scrollable ancestor at the
+    // cursor position.  WKWebView on macOS does not always deliver DOM wheel
+    // events to inner overflow:auto containers when the document body itself
+    // is not scrollable.
+    NSString *script = [NSString stringWithFormat:
+        @"(function(cx,cy,dx,dy){"
+         "var el=document.elementFromPoint(cx,cy);"
+         "while(el&&el!==document.documentElement){"
+           "var s=getComputedStyle(el);"
+           "var oy=s.overflowY,ox=s.overflowX;"
+           "var scrollableY=(oy==='auto'||oy==='scroll')&&el.scrollHeight>el.clientHeight;"
+           "var scrollableX=(ox==='auto'||ox==='scroll')&&el.scrollWidth>el.clientWidth;"
+           "if(scrollableY||scrollableX){"
+             "if(scrollableY)el.scrollTop+=dy;"
+             "if(scrollableX)el.scrollLeft+=dx;"
+             "return;"
+           "}"
+           "el=el.parentElement;"
+         "}"
+        "})(%f,%f,%f,%f);",
+        webX, webY, deltaX, deltaY];
+
+    [self evaluateJavaScript:script completionHandler:nil];
 }
 @end
 
@@ -851,6 +901,19 @@ void webview_set_keyboard_enabled(void *webview_ptr, bool enabled) {
     }
 
     rust_webview_set_keyboard_enabled_state(wrapper, enabled ? YES : NO, NO);
+}
+
+void webview_set_forward_scroll(void *webview_ptr, bool enabled) {
+    if (webview_ptr == NULL) {
+        return;
+    }
+
+    rust_webview_t *wrapper = (rust_webview_t *)webview_ptr;
+    if (wrapper->webview == nil) {
+        return;
+    }
+
+    [(KeyboardCapableWKWebView *)wrapper->webview setForwardScrollEvents:enabled ? YES : NO];
 }
 
 // Make the webview lose focus (so keyboard input doesn't go to it)
