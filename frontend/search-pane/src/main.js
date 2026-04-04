@@ -1667,6 +1667,8 @@ function injectStyle() {
     .panel-header {
       padding: 12px 14px 10px;
       border-bottom: 1px solid var(--border);
+      min-width: 0;
+      overflow: hidden;
     }
     .panel-title {
       color: var(--text);
