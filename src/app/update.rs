@@ -12,6 +12,7 @@ use crate::ghostty_embed::{
 };
 use iced::{Task, widget::operation, window};
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::Instant;
 
 mod browser;
@@ -1676,15 +1677,20 @@ fn open_in_editor_command(editor_command: &str, target_path: &str) -> Result<(),
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("editor command not found: {}", editor_command))?;
 
-    Command::new(resolved)
+    let mut child = Command::new(resolved)
         .arg(".")
         .current_dir(target_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("could not launch {}: {}", editor_command, error))
+        .map_err(|error| format!("could not launch {}: {}", editor_command, error))?;
+
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+
+    Ok(())
 }
 
 fn capitalize(value: &str) -> String {

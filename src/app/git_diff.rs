@@ -504,7 +504,7 @@ fn render_hunk_rows(lines: &[DiffLine]) -> String {
             }
             let hidden_lines = &context_run[CONTEXT_VISIBLE..context_run.len() - CONTEXT_VISIBLE];
             rendered.push_str(&format!(
-                "<details class=\"context-group\"><summary class=\"row row-gap\"><div class=\"line gap-line\"><span class=\"gap-caret\"></span></div><div class=\"code\"><span class=\"gap-label\">{} unmodified lines</span><span class=\"gap-action\"></span></div></summary><div class=\"context-hidden\">{}</div></details>",
+                "<details class=\"context-group\"><summary class=\"row row-gap\" title=\"Expand excerpt\"><div class=\"line gap-line\"><span class=\"gap-icons\"><span class=\"gap-icon gap-icon-up\"></span><span class=\"gap-icon gap-icon-down\"></span></span></div><div class=\"code\"><span class=\"gap-label\">{} unmodified lines</span><span class=\"gap-action\"></span></div></summary><div class=\"context-hidden\">{}</div></details>",
                 hidden_lines.len(),
                 hidden_lines
                     .iter()
@@ -1064,14 +1064,42 @@ body.tree-open .file-tree-panel {
   align-items: center;
   justify-content: center;
 }
-.gap-caret::before {
-  content: "▾";
-  color: #b7bcc6;
-  font-size: 14px;
+.gap-icons {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 26px;
+  min-height: 40px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  color: #9aa3ad;
+  transition: background 120ms ease, color 120ms ease;
+}
+.row-gap:hover .gap-icons {
+  background: rgba(255,255,255,0.08);
+  color: #c1c8d0;
+}
+.gap-icon {
+  position: relative;
+  width: 12px;
+  height: 10px;
+}
+.gap-icon::before {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
   line-height: 1;
 }
-.context-group[open] .gap-caret::before {
-  content: "▴";
+.gap-icon-up::before {
+  content: "⌃";
+}
+.gap-icon-down::before {
+  content: "⌄";
 }
 .row-gap .code {
   display: flex;
@@ -1092,7 +1120,7 @@ body.tree-open .file-tree-panel {
 }
 .gap-action {
   flex: none;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1102,10 +1130,10 @@ body.tree-open .file-tree-panel {
   color: #aeb7c4;
 }
 .context-group[open] .gap-action::before {
-  content: "Collapse";
+  content: "Collapse excerpt";
 }
 .context-group:not([open]) .gap-action::before {
-  content: "Expand";
+  content: "Expand excerpt";
 }
 .context-hidden {
   display: block;
