@@ -1424,6 +1424,7 @@ body.tree-open .file-tree-panel {
 .removed { color: #ff5f61; }
 .file-body {
   padding: 0 0 6px;
+  overflow-x: auto;
 }
 .hunk {
   margin-top: 6px;
