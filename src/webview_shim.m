@@ -178,12 +178,9 @@ static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
     return self;
 }
 - (BOOL)acceptsFirstResponder {
-    return self.keyboardEnabled;
+    return YES;
 }
 - (BOOL)becomeFirstResponder {
-    if (!self.keyboardEnabled) {
-        return NO;
-    }
     return [super becomeFirstResponder];
 }
 - (void)keyDown:(NSEvent *)event {
@@ -363,6 +360,14 @@ static void rust_webview_restore_safe_responder(rust_webview_t *wrapper) {
     NSString *action = (NSString *)message.body;
     if ([action isEqualToString:@"enable-text-input"]) {
         rust_webview_set_keyboard_enabled_state(_wrapper, YES, YES);
+        // After making the webview first responder, call back into JS to
+        // re-focus the pending input.  On the first click the webview was
+        // not first responder when JS originally called focus(), so the
+        // DOM focus may have been suppressed.  Re-triggering it now that
+        // the webview IS first responder guarantees the input is focused.
+        [_wrapper->webview evaluateJavaScript:
+            @"window.__WV_REFOCUS__ && window.__WV_REFOCUS__()"
+                            completionHandler:nil];
         return;
     }
 
@@ -537,9 +542,13 @@ void *webview_new(void *parent_ns_view) {
                                                   }
 
                                                   NSResponder *saved = [window firstResponder];
+                                                  BOOL clickedWebView = wrapper->prefers_key_equivalents;
                                                   // After the click is processed, restore the
                                                   // previous first responder if the webview stole it.
+                                                  // Skip restoration when the user clicked inside the
+                                                  // webview — let JS decide focus via enable/disable-text-input.
                                                   dispatch_async(dispatch_get_main_queue(), ^{
+                                                      if (clickedWebView) return;
                                                       if (window == nil || saved == nil) return;
                                                       NSResponder *current = [window firstResponder];
                                                       if (current == saved) return;

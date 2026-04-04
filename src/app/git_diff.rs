@@ -2126,7 +2126,10 @@ fn document_js() -> &'static str {
     }
   }
 
+  let pendingFocusTarget = null;
+
   function beginTextInput(target) {
+    pendingFocusTarget = target;
     postNativeAction('enable-text-input');
     window.setTimeout(() => {
       if (target && typeof target.focus === 'function') {
@@ -2137,6 +2140,17 @@ fn document_js() -> &'static str {
       }
     }, 0);
   }
+
+  window.__WV_REFOCUS__ = function () {
+    const target = pendingFocusTarget;
+    pendingFocusTarget = null;
+    if (target && typeof target.focus === 'function') {
+      target.focus();
+      if (typeof target.select === 'function') {
+        target.select();
+      }
+    }
+  };
 
   function endTextInput() {
     postNativeAction('disable-text-input');

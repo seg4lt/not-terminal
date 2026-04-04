@@ -147,14 +147,27 @@ function postAction(action) {
   handler.postMessage(typeof action === "string" ? action : JSON.stringify(action));
 }
 
+let pendingFocusTarget = null;
+
 function beginTextInput(target) {
+  pendingFocusTarget = target;
   postAction("enable-text-input");
+  // Fast path: works immediately when the webview is already first responder.
+  // When it isn't, the native handler calls __WV_REFOCUS__ after granting focus.
   window.setTimeout(() => {
     if (target && typeof target.focus === "function") {
       target.focus();
     }
   }, 0);
 }
+
+window.__WV_REFOCUS__ = function () {
+  const target = pendingFocusTarget;
+  pendingFocusTarget = null;
+  if (target && typeof target.focus === "function") {
+    target.focus();
+  }
+};
 
 function endTextInput() {
   postAction("disable-text-input");
