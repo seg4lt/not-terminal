@@ -28,6 +28,7 @@ enum SearchPaneActionEnvelope {
         include: Option<String>,
         exclude: Option<String>,
         include_gitignored: Option<bool>,
+        case_sensitive: Option<bool>,
     },
     SelectFile {
         path: String,
@@ -91,12 +92,14 @@ impl SearchPaneRuntime {
                 include,
                 exclude,
                 include_gitignored,
+                case_sensitive,
             } => Some(SearchPaneAction::QueryChanged(ProjectSearchRequest {
                 query,
                 options: crate::app::project_search::ProjectSearchOptions {
                     include: include.unwrap_or_default(),
                     exclude: exclude.unwrap_or_default(),
                     include_gitignored: include_gitignored.unwrap_or(false),
+                    case_sensitive: case_sensitive.unwrap_or(true),
                 },
             })),
             SearchPaneActionEnvelope::SelectFile { path } => {

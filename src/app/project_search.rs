@@ -72,6 +72,7 @@ pub(crate) struct ProjectSearchOptions {
     pub(crate) include: String,
     pub(crate) exclude: String,
     pub(crate) include_gitignored: bool,
+    pub(crate) case_sensitive: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -503,6 +504,9 @@ fn rg_search_command(worktree_path: &str, query: &str, options: &ProjectSearchOp
     command.args(["--glob", "!.git"]);
     if options.include_gitignored {
         command.arg("--no-ignore");
+    }
+    if !options.case_sensitive {
+        command.arg("--ignore-case");
     }
     append_glob_args(&mut command, options);
     command.args(["--engine", "auto", query, "."]);

@@ -26,6 +26,9 @@ root.innerHTML = `
         <button class="toolbar-btn toolbar-gitignore-btn" type="button" data-action="toggle-gitignored" title="Include gitignored files" aria-label="Include gitignored files" aria-pressed="false">
           ${iconGitignore()}
         </button>
+        <button class="toolbar-btn toolbar-case-btn" type="button" data-action="toggle-case-sensitive" title="Case sensitive" aria-label="Case sensitive" aria-pressed="true">
+          ${iconCaseSensitive()}
+        </button>
       </div>
       <div class="toolbar-search-options" data-role="search-options" hidden>
         <input
@@ -130,6 +133,7 @@ const state = {
     include: "",
     exclude: "",
     includeGitignored: false,
+    caseSensitive: true,
   },
 };
 
@@ -146,7 +150,11 @@ let previewRenderQueued = false;
 let previewRenderToken = 0;
 
 function postAction(action) {
-  if (!handler) return;
+  if (!handler) {
+    console.log("[search] postAction skipped - no handler, action:", action);
+    return;
+  }
+  console.log("[search] postAction sending:", typeof action === "string" ? action : action.type);
   handler.postMessage(typeof action === "string" ? action : JSON.stringify(action));
 }
 
@@ -1132,8 +1140,6 @@ function setLoading(payload) {
   if (payload && typeof payload.query === "string") {
     state.query = payload.query;
   }
-  state.previewRenderCache.clear();
-  state.previewExpandState.clear();
   summarizeCounts();
   renderPreview();
 }
@@ -1145,6 +1151,7 @@ function currentSearchRequest() {
     include: state.searchOptions.include,
     exclude: state.searchOptions.exclude,
     include_gitignored: state.searchOptions.includeGitignored,
+    case_sensitive: state.searchOptions.caseSensitive,
   };
 }
 
@@ -1214,6 +1221,7 @@ function handleSearchInput() {
   const value = searchInput.value;
   state.query = value;
   resetSearchCaches();
+  console.log("[search] scheduling request, query:", value);
   scheduleSearchRequest();
 }
 
@@ -1233,7 +1241,8 @@ function handleSearchOptionInput(event) {
 function renderSearchOptions() {
   const toggleButton = root.querySelector("[data-action='toggle-search-options']");
   const gitignoredToggle = root.querySelector("[data-action='toggle-gitignored']");
-  if (!toggleButton || !gitignoredToggle) return;
+  const caseToggle = root.querySelector("[data-action='toggle-case-sensitive']");
+  if (!toggleButton || !gitignoredToggle || !caseToggle) return;
 
   searchOptionsPanel.hidden = !state.optionsOpen;
   toggleButton.classList.toggle("is-active", state.optionsOpen);
@@ -1245,6 +1254,13 @@ function renderSearchOptions() {
     "aria-pressed",
     state.searchOptions.includeGitignored ? "true" : "false",
   );
+  caseToggle.classList.toggle("is-active", state.searchOptions.caseSensitive);
+  caseToggle.setAttribute(
+    "aria-pressed",
+    state.searchOptions.caseSensitive ? "true" : "false",
+  );
+  caseToggle.title = state.searchOptions.caseSensitive ? "Case sensitive" : "Case insensitive";
+  caseToggle.setAttribute("aria-label", state.searchOptions.caseSensitive ? "Case sensitive" : "Case insensitive");
 }
 
 function toggleSearchOptions() {
@@ -1259,6 +1275,13 @@ function toggleSearchOptions() {
 
 function toggleGitignoredFiles() {
   state.searchOptions.includeGitignored = !state.searchOptions.includeGitignored;
+  renderSearchOptions();
+  resetSearchCaches();
+  scheduleSearchRequest();
+}
+
+function toggleCaseSensitive() {
+  state.searchOptions.caseSensitive = !state.searchOptions.caseSensitive;
   renderSearchOptions();
   resetSearchCaches();
   scheduleSearchRequest();
@@ -1363,6 +1386,9 @@ root.querySelector("[data-action='toggle-search-options']").addEventListener("cl
 );
 root.querySelector("[data-action='toggle-gitignored']").addEventListener("click", () =>
   toggleGitignoredFiles(),
+);
+root.querySelector("[data-action='toggle-case-sensitive']").addEventListener("click", () =>
+  toggleCaseSensitive(),
 );
 root.querySelector("[data-action='prev-match']").addEventListener("click", () => moveMatch(-1));
 root.querySelector("[data-action='next-match']").addEventListener("click", () => moveMatch(1));
@@ -1505,7 +1531,7 @@ function injectStyle() {
     .toolbar-search-row {
       min-width: 0;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: minmax(0, 1fr) auto auto auto;
       gap: 8px;
       align-items: center;
     }
@@ -1560,6 +1586,10 @@ function injectStyle() {
       background: var(--accent-soft);
     }
     .toolbar-gitignore-btn.is-active {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .toolbar-case-btn.is-active {
       color: var(--accent);
       background: var(--accent-soft);
     }
@@ -1834,4 +1864,8 @@ function iconClose() {
 
 function iconGitignore() {
   return `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1"></circle><circle cx="8" cy="8" r="2" fill="currentColor"></circle></svg>`;
+}
+
+function iconCaseSensitive() {
+  return `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5h10M3 8h7M3 11h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg>`;
 }
